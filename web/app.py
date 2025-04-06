@@ -14,47 +14,58 @@ import pandas as pd
 import numpy as np
 from scapy.all import sniff, wrpcap
 import sys
-from models.fsnet.model import ModelPredictor
-from models.data_processor import DataProcessor
+from data_processor import DataConverter
 
 app = Flask(
     __name__,                   # 告诉 Flask 当前模块（文件）的名称，用于定位项目的根目录
     static_folder='static',     # 指定静态文件在文件系统中的存储目录
     static_url_path='/static')  # 定义静态文件在 URL 中的访问路径前缀。修改此处可以达到隐藏静态路径的效果
 
-# 添加配置项
+# 获取基础路径
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-app.config['ORIGINAL_DATA_FOLDER'] = os.path.join(BASE_DIR, 'originaldata')
-app.config['DATASET_FOLDER'] = os.path.join(BASE_DIR, 'dataset')
-app.config['MODEL_FOLDER'] = os.path.join(BASE_DIR, 'trained_models')
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max-limit
-app.config['UPLOAD_FOLDER'] = os.path.join(BASE_DIR, 'uploads')
 
-# 创建必要的目录
-os.makedirs(app.config['ORIGINAL_DATA_FOLDER'], exist_ok=True)
-os.makedirs(app.config['DATASET_FOLDER'], exist_ok=True)
-os.makedirs(app.config['MODEL_FOLDER'], exist_ok=True)
+# 设置应用配置参数
+app.config['ORIGINAL_DATA_FOLDER'] = os.path.join(BASE_DIR, 'originaldata')  # 原始数据存储目录
+app.config['DATASET_FOLDER'] = os.path.join(BASE_DIR, 'dataset')            # 处理后的数据集目录
+app.config['MODEL_FOLDER'] = os.path.join(BASE_DIR, 'trained_models')        # 训练好的模型目录
+app.config['MAX_CONTENT_LENGTH'] = None     # 16 * 1024 * 1024  # 上传文件大小限制（16MB）
+app.config['UPLOAD_FOLDER'] = os.path.join(BASE_DIR, 'uploads')              # 文件上传目录
+
+# 创建必要的文件目录
+for path in [
+    app.config['ORIGINAL_DATA_FOLDER'],
+    app.config['DATASET_FOLDER'],
+    app.config['MODEL_FOLDER'],
+    app.config['UPLOAD_FOLDER']
+]:
+    os.makedirs(path, exist_ok=True)  # exist_ok=True表示如果目录已存在不报错
 
 app.logger.setLevel(logging.INFO)   # 开发环境，使用 DEBUG 级别，记录所有细节。生产环境，使用 INFO 或更高，仅记录关键信息。
 
 # 全局变量
-realtime_data_queue = queue.Queue()
-is_monitoring = False
-current_model = None
-current_interface = None
-model_predictor = None
-current_monitoring_session = None
+realtime_data_queue = queue.Queue()  # 实时数据队列（用于线程间通信）
+is_monitoring = False                # 监控状态标志
+current_model = None                 # 当前使用的模型
+current_interface = None             # 当前监控的网络接口
+model_predictor = None               # 模型预测器实例
+current_monitoring_session = None    # 当前监控会话
+
+# 监控数据存储结构
 monitoring_data = {
-    'sessions': {},
-    'current_session': None
+    'sessions': {},         # 存储所有监控会话
+    'current_session': None # 当前活动会话
 }
+
+# 训练状态跟踪
 training_status = {
-    'is_training': False,
-    'progress': 0,
-    'metrics': {
-        'epochs': [],
-        'losses': [],
-        'accuracies': []
+    'is_training': False,  # 是否正在训练
+    'progress': 0,         # 训练进度百分比
+    'metrics': {           # 训练指标存储
+        'epochs': [],      # 训练轮次
+        'losses': [],      # 训练损失
+        'accuracies': [],   # 训练准确率
+        'val_losses': [],   # 验证损失
+        'val_accuracies': [] # 验证准确率
     }
 }
 
@@ -68,6 +79,8 @@ def index():
         'network_interfaces': psutil.net_if_stats(),
         'running_processes': len(psutil.pids())
     }
+    # 渲染index.html模板并传递系统状态数据
+    # render_template 是 Flask 框架中用于渲染 HTML 模板的核心函数，它的作用是将动态数据与静态 HTML 模板结合，生成最终的网页内容返回给浏览器。
     return render_template('index.html', system_status=system_status)
 
 @app.route('/get_system_status')
@@ -88,9 +101,11 @@ def get_system_status():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})
 
+# 任何访问该URL的请求（无论GET/POST）都会触发 realtime_monitor() 函数。
 @app.route('/realtime_monitor', methods=['GET', 'POST'])
 def realtime_monitor():
     # 获取系统状态
+    # 如果仅是由<a href="{{ url_for('realtime_monitor') }}">点击链接会发送 ​​GET 请求​​ 到 /realtime_monitor，就只更新系统状态
     system_status = {
         'cpu_usage': psutil.cpu_percent(interval=1),
         'memory_usage': psutil.virtual_memory().percent,
@@ -105,7 +120,7 @@ def realtime_monitor():
         if action == 'start':
             model_name = data.get('model')
             interfaces = data.get('interfaces', [])
-            capture_duration = data.get('capture_duration', 300)  # 默认5分钟
+            capture_duration = data.get('capture_duration', 60)  # 默认1分钟
 
             # 创建新的监控会话
             session_id = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -114,7 +129,7 @@ def realtime_monitor():
                 'start_time': datetime.now(),
                 'interfaces': interfaces,
                 'model': model_name,
-                'datasets': [],
+                'datasets': [], # 初始化空列表，用于存储捕获的数据集路径，['dataset_1.pcap', 'dataset_2.pcap']
                 'capture_duration': capture_duration
             }
 
@@ -182,11 +197,34 @@ def get_monitor_data():
             }
         })
 
+@app.route('/get_datasets')
+def get_datasets():
+    """获取可用的数据集列表（文件夹）"""
+    try:
+        datasets = []
+        dataset_dir = app.config['DATASET_FOLDER']
+        if os.path.exists(dataset_dir):
+            for item in os.listdir(dataset_dir):
+                item_path = os.path.join(dataset_dir, item)
+                if os.path.isdir(item_path):
+                    # 检查目录中是否包含json文件
+                    json_files = [f for f in os.listdir(item_path) if f.endswith('.json')]
+                    if json_files:
+                        datasets.append({
+                            'name': item,
+                            'path': item_path,
+                            'file_count': len(json_files)
+                        })
+        return jsonify({'status': 'success', 'datasets': datasets})
+    except Exception as e:
+        app.logger.error(f"获取数据集列表错误: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)})
+
 @app.route('/historical_analysis', methods=['GET', 'POST'])
 def historical_analysis():
     # 获取系统状态
     system_status = {
-        'cpu_usage': psutil.cpu_percent(),
+        'cpu_usage': psutil.cpu_percent(interval=1),
         'memory_usage': psutil.virtual_memory().percent,
         'disk_usage': psutil.disk_usage('/').percent,
         'network_interfaces': psutil.net_if_stats(),
@@ -195,48 +233,104 @@ def historical_analysis():
 
     if request.method == 'POST':
         if 'file' not in request.files:
+            app.logger.error("没有文件被上传")
             return jsonify({'status': 'error', 'message': '没有文件'})
 
         file = request.files['file']
         if file.filename == '':
+            app.logger.error("文件名为空")
             return jsonify({'status': 'error', 'message': '没有选择文件'})
 
         if file:
-            # 创建时间戳目录
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            original_dir = os.path.join(app.config['ORIGINAL_DATA_FOLDER'], f'data-{timestamp}')
-            dataset_dir = os.path.join(app.config['DATASET_FOLDER'], f'data-{timestamp}')
-            os.makedirs(original_dir, exist_ok=True)
-            os.makedirs(dataset_dir, exist_ok=True)
+            try:
+                # 检查文件大小
+                file.seek(0, 2)  # 移动到文件末尾
+                file_size = file.tell()  # 获取文件大小
+                file.seek(0)  # 重置文件指针到开始
 
-            # 保存原始文件
-            filename = secure_filename(file.filename)
-            original_path = os.path.join(original_dir, filename)
-            file.save(original_path)
+                if file_size > app.config['MAX_CONTENT_LENGTH']:
+                    app.logger.error(f"文件大小超过限制: {file_size} bytes")
+                    return jsonify({'status': 'error', 'message': '文件大小超过限制'})
 
-            # 处理数据
-            data_processor = DataProcessor()
-            if filename.endswith('.pcap'):
-                flows = data_processor.process_pcap(original_path)
-            elif filename.endswith('.csv'):
-                flows = data_processor.process_csv(original_path)
-            else:
-                return jsonify({'status': 'error', 'message': '不支持的文件格式'})
+                # 创建时间戳目录
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                dataset_name = f"data_{timestamp}"
 
-            # 保存处理后的数据
-            processed_filename = f"{os.path.splitext(filename)[0]}.json"
-            processed_path = os.path.join(dataset_dir, processed_filename)
-            with open(processed_path, 'w', encoding='utf-8') as f:
-                json.dump(flows, f, ensure_ascii=False, indent=2)
+                # 创建原始数据目录
+                original_dir = os.path.join(app.config['ORIGINAL_DATA_FOLDER'], dataset_name)
+                os.makedirs(original_dir, exist_ok=True)
+                app.logger.info(f"创建原始数据目录: {original_dir}")
 
-            return jsonify({
-                'status': 'success',
-                'message': '文件处理完成',
-                'data': {
-                    'original_file': original_path,
-                    'processed_file': processed_path
-                }
-            })
+                # 创建数据集目录
+                dataset_dir = os.path.join(app.config['DATASET_FOLDER'], dataset_name)
+                os.makedirs(dataset_dir, exist_ok=True)
+                app.logger.info(f"创建数据集目录: {dataset_dir}")
+
+                # 保存原始文件
+                filename = secure_filename(file.filename)
+                original_path = os.path.join(original_dir, filename)
+                file.save(original_path)
+                app.logger.info(f"保存原始文件: {original_path}")
+
+                # 检查文件是否成功保存
+                if not os.path.exists(original_path):
+                    app.logger.error(f"文件保存失败: {original_path}")
+                    return jsonify({'status': 'error', 'message': '文件保存失败'})
+
+                # 调用数据处理脚本
+                try:
+                    converter = DataConverter()
+                    # 处理单个文件
+                    if filename.endswith('.pcap'):
+                        flows = converter.process_pcap(original_path)
+                    elif filename.endswith('.csv'):
+                        flows = converter.process_csv(original_path)
+                    else:
+                        return jsonify({'status': 'error', 'message': '不支持的文件格式'})
+
+                    if not flows:
+                        return jsonify({'status': 'error', 'message': '数据处理失败：没有提取到有效数据'})
+
+                    # 保存处理后的数据
+                    processed_filename = f"{os.path.splitext(filename)[0]}.json"
+                    processed_path = os.path.join(dataset_dir, processed_filename)
+                    with open(processed_path, 'w', encoding='utf-8') as f:
+                        json.dump(flows, f, ensure_ascii=False, indent=2)
+                    app.logger.info(f"保存处理后的数据到: {processed_path}")
+
+                    # 保存数据集信息
+                    info = {
+                        'name': dataset_name,
+                        'original_file': original_path,
+                        'processed_file': processed_path,
+                        'process_time': datetime.now().isoformat(),
+                        'file_count': 1,
+                        'flow_count': len(flows),
+                        'total_packets': sum(len(flow['packet_length']) for flow in flows)
+                    }
+                    info_path = os.path.join(dataset_dir, 'info.json')
+                    with open(info_path, 'w', encoding='utf-8') as f:
+                        json.dump(info, f, ensure_ascii=False, indent=2)
+
+                    return jsonify({
+                        'status': 'success',
+                        'message': '文件处理完成',
+                        'data': {
+                            'original_file': original_path,
+                            'processed_file': processed_path,
+                            'dataset_name': dataset_name,
+                            'flow_count': len(flows),
+                            'total_packets': sum(len(flow['packet_length']) for flow in flows)
+                        }
+                    })
+
+                except Exception as e:
+                    app.logger.error(f"数据处理失败: {str(e)}")
+                    return jsonify({'status': 'error', 'message': f'数据处理失败: {str(e)}'})
+
+            except Exception as e:
+                app.logger.error(f"文件处理错误: {str(e)}", exc_info=True)
+                return jsonify({'status': 'error', 'message': f'文件处理错误: {str(e)}'})
 
     return render_template('historical_analysis.html', system_status=system_status)
 
@@ -334,12 +428,8 @@ def model_training():
         if action == 'start':
             model = data.get('model')
             dataset = data.get('dataset')
-            epochs = data.get('epochs')
-            batch_size = data.get('batch_size')
-            learning_rate = data.get('learning_rate')
-            validation_split = data.get('validation_split', 0.2)
 
-            if not all([model, dataset, epochs, batch_size, learning_rate]):
+            if not all([model, dataset]):
                 return jsonify({'status': 'error', 'message': '参数不完整'})
 
             training_status['is_training'] = True
@@ -355,7 +445,7 @@ def model_training():
             # 启动训练线程
             threading.Thread(
                 target=train_model,
-                args=(model, dataset, epochs, batch_size, learning_rate, validation_split),
+                args=(model, dataset),
                 daemon=True
             ).start()
 
@@ -366,15 +456,6 @@ def model_training():
             return jsonify({'status': 'success', 'message': '训练已停止'})
 
     return render_template('model_training.html', system_status=system_status)
-
-@app.route('/get_datasets')
-def get_datasets():
-    try:
-        datasets = [d for d in os.listdir(app.config['UPLOAD_FOLDER'])
-                   if os.path.isdir(os.path.join(app.config['UPLOAD_FOLDER'], d))]
-        return jsonify({'datasets': datasets})
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)})
 
 @app.route('/get_training_status')
 def get_training_status():
@@ -388,7 +469,7 @@ def get_training_status():
 
 @app.route('/get_models')
 def get_models():
-    """获取所有可用的模型"""
+    """获取所有已训练好的模型"""
     try:
         models = []
         model_dir = app.config['MODEL_FOLDER']
@@ -396,21 +477,53 @@ def get_models():
             for model_name in os.listdir(model_dir):
                 model_path = os.path.join(model_dir, model_name)
                 if os.path.isdir(model_path):
-                    # 读取模型配置文件
-                    config_file = os.path.join(model_path, 'config.json')
-                    if os.path.exists(config_file):
-                        with open(config_file, 'r', encoding='utf-8') as f:
-                            config = json.load(f)
-                            models.append({
-                                'name': model_name,
-                                'type': config.get('type', 'unknown'),
-                                'description': config.get('description', ''),
-                                'parameters': config.get('parameters', {})
-                            })
+                    # 检查是否存在模型文件
+                    model_files = [f for f in os.listdir(model_path) if f.endswith('.h5') or f.endswith('.pth')]
+                    if model_files:
+                        models.append({
+                            'name': model_name,
+                            'path': model_path,
+                            'file_count': len(model_files)
+                        })
         return jsonify({'status': 'success', 'models': models})
     except Exception as e:
-        logger.error(f"获取模型列表错误: {str(e)}")
+        app.logger.error(f"获取模型列表错误: {str(e)}")
         return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/get_available_models')
+def get_available_models():
+    """获取可用的模型列表"""
+    try:
+        models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'models')
+        available_models = []
+
+        # 检查dl和ml目录
+        for model_type in ['dl', 'ml']:
+            type_dir = os.path.join(models_dir, model_type)
+            if os.path.exists(type_dir):
+                # 获取所有子目录
+                for model_name in os.listdir(type_dir):
+                    model_path = os.path.join(type_dir, model_name)
+                    if os.path.isdir(model_path):
+                        # 检查是否存在对应的主模型文件
+                        main_model_file = os.path.join(model_path, f"{model_name}_main_model.py")
+                        if os.path.exists(main_model_file):
+                            available_models.append({
+                                'name': model_name,
+                                'type': model_type
+                            })
+
+        return jsonify({
+            'status': 'success',
+            'models': available_models
+        })
+
+    except Exception as e:
+        app.logger.error(f"获取可用模型列表时出错: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 def monitor_traffic(session_id, capture_duration):
     global is_monitoring
@@ -534,122 +647,34 @@ def analyze_packets(packets, session_id, dataset_name):
     except Exception as e:
         app.logger.error(f"分析错误: {str(e)}")
 
-def train_model(model, dataset, epochs, batch_size, learning_rate, validation_split):
-    global training_status
+def train_model(model, dataset):
+    """训练模型"""
     try:
-        # 加载数据集
-        dataset_path = os.path.join(app.config['DATASET_FOLDER'], dataset)
-        if not os.path.exists(dataset_path):
-            raise FileNotFoundError(f"数据集 {dataset} 不存在")
+        # 构建命令
+        cmd = [
+            './run.sh',
+            'train',
+            model,
+            dataset
+        ]
 
-        # 创建模型目录
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        model_dir = os.path.join(app.config['MODEL_FOLDER'], f"{model}_{timestamp}")
-        os.makedirs(model_dir, exist_ok=True)
-
-        # 保存模型配置
-        config = {
-            'type': model,
-            'description': f'使用数据集 {dataset} 训练的模型',
-            'training_time': timestamp,
-            'parameters': {
-                'epochs': epochs,
-                'batch_size': batch_size,
-                'learning_rate': learning_rate,
-                'validation_split': validation_split
-            },
-            'metrics': {
-                'final_loss': 0.0,
-                'final_accuracy': 0.0,
-                'best_epoch': 0,
-                'training_duration': 0
-            }
-        }
-
-        # 导入FS-Net模型
-        from models.fsnet.model import FSnet
-        from models.fsnet.trainer import FSnetTrainer
-
-        # 初始化模型
-        model = FSnet()
-
-        # 加载数据集
-        data_processor = DataProcessor()
-        flows = data_processor.load_from_json(dataset_path)
-
-        # 准备训练数据
-        X = np.array([flow['packet_length'] for flow in flows])
-        y = np.array([flow.get('label', 0) for flow in flows])
-
-        # 划分训练集和验证集
-        split_idx = int(len(X) * (1 - validation_split))
-        X_train, X_val = X[:split_idx], X[split_idx:]
-        y_train, y_val = y[:split_idx], y[split_idx:]
-
-        # 初始化训练器
-        trainer = FSnetTrainer(
-            model=model,
-            learning_rate=learning_rate,
-            batch_size=batch_size
+        # 执行训练命令
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
         )
 
-        start_time = time.time()
-        best_accuracy = 0
-        best_epoch = 0
-
-        for epoch in range(epochs):
-            if not training_status['is_training']:
-                break
-
-            # 训练一个epoch
-            train_loss, train_acc = trainer.train_epoch(X_train, y_train)
-
-            # 验证
-            val_loss, val_acc = trainer.validate(X_val, y_val)
-
-            # 更新训练状态
-            training_status['progress'] = int((epoch + 1) / epochs * 100)
-            training_status['metrics']['epochs'].append(epoch + 1)
-            training_status['metrics']['losses'].append(train_loss)
-            training_status['metrics']['accuracies'].append(train_acc)
-            training_status['metrics']['val_losses'].append(val_loss)
-            training_status['metrics']['val_accuracies'].append(val_acc)
-
-            if val_acc > best_accuracy:
-                best_accuracy = val_acc
-                best_epoch = epoch + 1
-                # 保存最佳模型
-                trainer.save_model(os.path.join(model_dir, 'model.pth'))
-
-        if training_status['is_training']:
-            # 更新配置中的指标
-            config['metrics'].update({
-                'final_loss': training_status['metrics']['losses'][-1],
-                'final_accuracy': training_status['metrics']['accuracies'][-1],
-                'best_epoch': best_epoch,
-                'training_duration': time.time() - start_time
-            })
-
-            # 保存模型配置
-            with open(os.path.join(model_dir, 'config.json'), 'w', encoding='utf-8') as f:
-                json.dump(config, f, ensure_ascii=False, indent=2)
-
-            # 保存训练历史
-            history = {
-                'epochs': training_status['metrics']['epochs'],
-                'losses': training_status['metrics']['losses'],
-                'accuracies': training_status['metrics']['accuracies'],
-                'val_losses': training_status['metrics']['val_losses'],
-                'val_accuracies': training_status['metrics']['val_accuracies']
-            }
-            with open(os.path.join(model_dir, 'history.json'), 'w', encoding='utf-8') as f:
-                json.dump(history, f, ensure_ascii=False, indent=2)
-
-        training_status['is_training'] = False
+        # 返回进程ID，前端可以通过这个ID查询训练状态
+        return jsonify({
+            'status': 'success',
+            'pid': process.pid
+        })
 
     except Exception as e:
-        app.logger.error(f"训练错误: {str(e)}")
-        training_status['is_training'] = False
+        app.logger.error(f"训练模型时出错: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 if __name__ == '__main__':
     # 确保上传目录存在
