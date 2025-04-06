@@ -1,0 +1,464 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card mt-4">
+    <div class="card-header">
+        <h4>模型训练</h4>
+    </div>
+    <div class="card-body">
+        <!-- 数据集上传区域 -->
+        <div class="row mb-4">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header">上传训练数据集</div>
+                    <div class="card-body">
+                        <form id="uploadForm" enctype="multipart/form-data">
+                            <div class="mb-3">
+                                <label class="form-label">数据集名称</label>
+                                <input type="text" class="form-control" id="datasetName" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">选择文件</label>
+                                <input type="file" class="form-control" id="fileInput" accept=".csv" multiple required>
+                            </div>
+                            <div class="progress mb-3" style="height: 20px;">
+                                <div class="progress-bar" id="uploadProgress" role="progressbar" style="width: 0%">0%</div>
+                            </div>
+                            <div class="progress mb-3" style="height: 20px;">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated" id="processProgress" role="progressbar" style="width: 0%">处理中 0%</div>
+                            </div>
+                            <button type="submit" class="btn btn-primary" id="uploadBtn">上传文件</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">数据集列表</div>
+                    <div class="card-body">
+                        <div class="card mb-3">
+                            <div class="card-header" data-bs-toggle="collapse" data-bs-target="#datasetList" aria-expanded="false">
+                                <i class="fas fa-database me-2"></i>数据集列表
+                                <i class="fas fa-chevron-down float-end"></i>
+                            </div>
+                            <div id="datasetList" class="collapse">
+                                <div class="card-body">
+                                    <div class="list-group" id="datasetListGroup">
+                                        <!-- 数据集列表将通过JavaScript动态添加 -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 训练进度和结果 -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">训练进度</div>
+                    <div class="card-body">
+                        <div class="progress mb-3" style="height: 20px;">
+                            <div class="progress-bar" id="trainingProgress" role="progressbar" style="width: 0%">0%</div>
+                        </div>
+                        <div id="trainingStatus">等待开始训练...</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">训练指标</div>
+                    <div class="card-body">
+                        <div id="metricsChart" style="height: 300px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 模型评估结果 -->
+        <div class="row mt-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">混淆矩阵</div>
+                    <div class="card-body">
+                        <div id="confusionMatrix" style="height: 300px;"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">ROC曲线</div>
+                    <div class="card-body">
+                        <div id="rocCurve" style="height: 300px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// 初始化图表
+let metricsChart = echarts.init(document.getElementById('metricsChart'));
+let confusionMatrix = echarts.init(document.getElementById('confusionMatrix'));
+let rocCurve = echarts.init(document.getElementById('rocCurve'));
+
+// 训练指标图表配置
+let metricsOption = {
+    title: {
+        text: '训练指标'
+    },
+    tooltip: {
+        trigger: 'axis'
+    },
+    legend: {
+        data: ['训练损失', '验证损失', '训练准确率', '验证准确率']
+    },
+    xAxis: {
+        type: 'category',
+        data: []
+    },
+    yAxis: [
+        {
+            type: 'value',
+            name: '损失',
+            position: 'left'
+        },
+        {
+            type: 'value',
+            name: '准确率',
+            position: 'right',
+            axisLabel: {
+                formatter: '{value}%'
+            }
+        }
+    ],
+    series: [
+        {
+            name: '训练损失',
+            type: 'line',
+            data: []
+        },
+        {
+            name: '验证损失',
+            type: 'line',
+            data: []
+        },
+        {
+            name: '训练准确率',
+            type: 'line',
+            yAxisIndex: 1,
+            data: []
+        },
+        {
+            name: '验证准确率',
+            type: 'line',
+            yAxisIndex: 1,
+            data: []
+        }
+    ]
+};
+
+// 混淆矩阵图表配置
+let confusionMatrixOption = {
+    title: {
+        text: '混淆矩阵'
+    },
+    tooltip: {
+        position: 'top'
+    },
+    grid: {
+        height: '70%',
+        top: '15%'
+    },
+    xAxis: {
+        type: 'category',
+        data: ['预测正常', '预测异常'],
+        splitArea: {
+            show: true
+        }
+    },
+    yAxis: {
+        type: 'category',
+        data: ['实际正常', '实际异常'],
+        splitArea: {
+            show: true
+        }
+    },
+    visualMap: {
+        min: 0,
+        max: 1,
+        calculable: true,
+        orient: 'horizontal',
+        left: 'center',
+        bottom: '15%'
+    },
+    series: [{
+        name: '混淆矩阵',
+        type: 'heatmap',
+        data: [],
+        label: {
+            show: true
+        },
+        emphasis: {
+            itemStyle: {
+                shadowBlur: 10,
+                shadowColor: 'rgba(0, 0, 0, 0.5)'
+            }
+        }
+    }]
+};
+
+// ROC曲线图表配置
+let rocOption = {
+    title: {
+        text: 'ROC曲线'
+    },
+    tooltip: {
+        trigger: 'axis'
+    },
+    xAxis: {
+        type: 'value',
+        name: '假阳性率',
+        min: 0,
+        max: 1
+    },
+    yAxis: {
+        type: 'value',
+        name: '真阳性率',
+        min: 0,
+        max: 1
+    },
+    series: [{
+        name: 'ROC曲线',
+        type: 'line',
+        data: [],
+        smooth: true,
+        markLine: {
+            data: [[{
+                coord: [0, 0]
+            }, {
+                coord: [1, 1]
+            }]],
+            lineStyle: {
+                type: 'dashed'
+            }
+        }
+    }]
+};
+
+// 初始化图表
+metricsChart.setOption(metricsOption);
+confusionMatrix.setOption(confusionMatrixOption);
+rocCurve.setOption(rocOption);
+
+// 文件上传处理
+document.getElementById('uploadForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const fileInput = document.getElementById('fileInput');
+    const datasetName = document.getElementById('datasetName').value;
+    const files = fileInput.files;
+
+    if (!datasetName) {
+        alert('请输入数据集名称');
+        return;
+    }
+
+    if (files.length === 0) {
+        alert('请选择文件');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('datasetName', datasetName);
+    for (let i = 0; i < files.length; i++) {
+        formData.append('files[]', files[i]);
+    }
+
+    const xhr = new XMLHttpRequest();
+    xhr.upload.addEventListener('progress', function(e) {
+        if (e.lengthComputable) {
+            const percent = Math.round((e.loaded / e.total) * 100);
+            document.getElementById('uploadProgress').style.width = percent + '%';
+            document.getElementById('uploadProgress').textContent = percent + '%';
+        }
+    });
+
+    xhr.addEventListener('load', function() {
+        if (xhr.status === 200) {
+            const response = JSON.parse(xhr.responseText);
+            if (response.status === 'success') {
+                // 开始监听处理进度
+                const processProgress = document.getElementById('processProgress');
+                processProgress.style.width = '0%';
+                processProgress.textContent = '处理中 0%';
+                processProgress.style.display = 'block';
+
+                // 使用EventSource监听处理进度
+                const eventSource = new EventSource('/process_progress');
+                eventSource.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    if (data.status === 'progress') {
+                        processProgress.style.width = data.progress + '%';
+                        processProgress.textContent = '处理中 ' + data.progress + '%';
+                    } else if (data.status === 'completed') {
+                        processProgress.style.width = '100%';
+                        processProgress.textContent = '处理完成';
+                        eventSource.close();
+                        alert('文件处理完成');
+                        loadDatasets(); // 刷新数据集列表
+                    } else if (data.status === 'error') {
+                        processProgress.style.width = '0%';
+                        processProgress.textContent = '处理失败';
+                        eventSource.close();
+                        alert('文件处理失败: ' + data.message);
+                    }
+                };
+            } else {
+                alert('文件上传失败: ' + response.message);
+            }
+        } else {
+            alert('文件上传失败');
+        }
+    });
+
+    xhr.addEventListener('error', function() {
+        alert('文件上传失败');
+    });
+
+    xhr.open('POST', '/upload_training_dataset');
+    xhr.send(formData);
+});
+
+// 加载数据集列表
+function loadDatasets() {
+    fetch('/get_datasets')
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                const select = document.getElementById('datasetListGroup');
+                select.innerHTML = '';
+                data.datasets.forEach(dataset => {
+                    const option = document.createElement('div');
+                    option.className = 'list-group-item';
+                    option.textContent = dataset.name;
+                    select.appendChild(option);
+                });
+                document.getElementById('startTrainingBtn').disabled = false;
+            }
+        })
+        .catch(error => console.error('加载数据集失败:', error));
+}
+
+// 开始训练
+document.getElementById('startTrainingBtn').addEventListener('click', function() {
+    const dataset = document.getElementById('datasetListGroup').children[0].textContent;
+    if (!dataset) {
+        alert('请选择数据集');
+        return;
+    }
+
+    // 发送训练请求
+    fetch('/train_model', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            dataset: dataset
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            // 开始监听训练进度
+            startTrainingProgress();
+        } else {
+            alert('开始训练失败: ' + data.message);
+        }
+    })
+    .catch(error => console.error('开始训练失败:', error));
+});
+
+// 监听训练进度
+function startTrainingProgress() {
+    const progressBar = document.getElementById('trainingProgress');
+    const statusDiv = document.getElementById('trainingStatus');
+    let eventSource = new EventSource('/training_progress');
+
+    eventSource.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        if (data.status === 'progress') {
+            // 更新进度条
+            progressBar.style.width = data.progress + '%';
+            progressBar.textContent = data.progress + '%';
+            statusDiv.textContent = data.message;
+
+            // 更新训练指标图表
+            if (data.metrics) {
+                updateMetricsChart(data.metrics);
+            }
+        } else if (data.status === 'completed') {
+            // 训练完成，更新评估结果
+            eventSource.close();
+            progressBar.style.width = '100%';
+            progressBar.textContent = '100%';
+            statusDiv.textContent = '训练完成';
+
+            // 更新评估结果图表
+            if (data.evaluation) {
+                updateEvaluationCharts(data.evaluation);
+            }
+        } else if (data.status === 'error') {
+            eventSource.close();
+            statusDiv.textContent = '训练失败: ' + data.message;
+        }
+    };
+
+    eventSource.onerror = function() {
+        eventSource.close();
+        statusDiv.textContent = '训练进度监听失败';
+    };
+}
+
+// 更新训练指标图表
+function updateMetricsChart(metrics) {
+    metricsOption.xAxis.data = metrics.epochs;
+    metricsOption.series[0].data = metrics.train_loss;
+    metricsOption.series[1].data = metrics.val_loss;
+    metricsOption.series[2].data = metrics.train_accuracy;
+    metricsOption.series[3].data = metrics.val_accuracy;
+    metricsChart.setOption(metricsOption);
+}
+
+// 更新评估结果图表
+function updateEvaluationCharts(evaluation) {
+    // 更新混淆矩阵
+    confusionMatrixOption.series[0].data = evaluation.confusion_matrix.map((row, i) =>
+        row.map((value, j) => [j, i, value])
+    ).flat();
+    confusionMatrix.setOption(confusionMatrixOption);
+
+    // 更新ROC曲线
+    rocOption.series[0].data = evaluation.roc_curve;
+    rocCurve.setOption(rocOption);
+}
+
+// 初始化页面
+document.addEventListener('DOMContentLoaded', function() {
+    loadDatasets();
+    initCharts();
+});
+
+// 窗口大小改变时重绘图表
+window.addEventListener('resize', function() {
+    metricsChart.resize();
+    confusionMatrix.resize();
+    rocCurve.resize();
+});
+</script>
+{% endblock %}

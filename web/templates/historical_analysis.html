@@ -1,0 +1,391 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card mt-4">
+    <div class="card-header">
+        <h4>历史数据分析</h4>
+    </div>
+    <div class="card-body">
+        <!-- 数据选择区域 -->
+        <div class="row mb-4">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header">
+                        <ul class="nav nav-tabs card-header-tabs">
+                            <li class="nav-item">
+                                <a class="nav-link active" data-bs-toggle="tab" href="#uploadTab">上传PCAP文件</a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" data-bs-toggle="tab" href="#selectTab">选择处理数据</a>
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="card-body">
+                        <div class="tab-content">
+                            <!-- 上传PCAP文件 -->
+                            <div class="tab-pane fade show active" id="uploadTab">
+                                <div class="card mb-4">
+                                    <div class="card-header">
+                                        <h5>上传PCAP文件</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <form id="uploadForm" enctype="multipart/form-data">
+                                            <div class="mb-3">
+                                                <label class="form-label">选择文件</label>
+                                                <input type="file" class="form-control" id="fileInput" accept=".pcap,.csv" required>
+                                            </div>
+                                            <div class="progress mb-3" style="height: 20px;">
+                                                <div class="progress-bar" id="uploadProgress" role="progressbar" style="width: 0%">0%</div>
+                                            </div>
+                                            <div class="progress mb-3" style="height: 20px;">
+                                                <div class="progress-bar progress-bar-striped progress-bar-animated" id="processProgress" role="progressbar" style="width: 0%">处理中 0%</div>
+                                            </div>
+                                            <button type="submit" class="btn btn-primary" id="uploadBtn">上传文件</button>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- 选择处理数据 -->
+                            <div class="tab-pane fade" id="selectTab">
+                                <div class="list-group" id="datasetList">
+                                    <!-- 数据集列表将通过JavaScript动态添加 -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">选择检测模型</div>
+                    <div class="card-body">
+                        <select class="form-select" id="modelSelect">
+                            <!-- 模型选项将通过JavaScript动态添加 -->
+                        </select>
+                        <button class="btn btn-primary mt-3" id="startAnalysisBtn" disabled>开始分析</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 分析结果展示区域 -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">流量统计</div>
+                    <div class="card-body">
+                        <div id="trafficChart" style="height: 300px;"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">异常检测结果</div>
+                    <div class="card-body">
+                        <div id="anomalyChart" style="height: 300px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 详细分析结果 -->
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">详细分析结果</div>
+                    <div class="card-body">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>时间</th>
+                                    <th>流量大小</th>
+                                    <th>数据包数量</th>
+                                    <th>异常类型</th>
+                                    <th>置信度</th>
+                                </tr>
+                            </thead>
+                            <tbody id="resultTable">
+                                <!-- 分析结果将通过JavaScript动态添加 -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// 初始化图表
+let trafficChart = echarts.init(document.getElementById('trafficChart'));
+let anomalyChart = echarts.init(document.getElementById('anomalyChart'));
+
+// 流量图表配置
+let trafficOption = {
+    title: {
+        text: '流量分布'
+    },
+    tooltip: {
+        trigger: 'axis'
+    },
+    xAxis: {
+        type: 'category',
+        data: []
+    },
+    yAxis: {
+        type: 'value',
+        name: '数据包数量'
+    },
+    series: [{
+        name: '流量',
+        type: 'line',
+        data: [],
+        areaStyle: {}
+    }]
+};
+
+// 异常检测图表配置
+let anomalyOption = {
+    title: {
+        text: '异常类型分布'
+    },
+    tooltip: {
+        trigger: 'item',
+        formatter: '{b}: {c} ({d}%)'
+    },
+    series: [{
+        type: 'pie',
+        radius: '70%',
+        data: [],
+        emphasis: {
+            itemStyle: {
+                shadowBlur: 10,
+                shadowOffsetX: 0,
+                shadowColor: 'rgba(0, 0, 0, 0.5)'
+            }
+        }
+    }]
+};
+
+// 初始化图表
+trafficChart.setOption(trafficOption);
+anomalyChart.setOption(anomalyOption);
+
+// 加载模型列表
+function loadModels() {
+    fetch('/get_models')
+        .then(response => response.json())
+        .then(data => {
+            const modelSelect = document.getElementById('modelSelect');
+            modelSelect.innerHTML = '';
+            if (data.models && data.models.length > 0) {
+                data.models.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model.name;
+                    option.text = model.name;
+                    modelSelect.appendChild(option);
+                });
+            } else {
+                const option = document.createElement('option');
+                option.value = '';
+                option.text = '暂无可用的检测模型';
+                option.disabled = true;
+                modelSelect.appendChild(option);
+            }
+        })
+        .catch(error => {
+            console.error('加载模型列表失败:', error);
+            const modelSelect = document.getElementById('modelSelect');
+            modelSelect.innerHTML = '<option value="" disabled>加载模型列表失败</option>';
+        });
+}
+
+// 加载数据集列表
+function loadDatasets() {
+    fetch('/get_datasets')
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                const list = document.getElementById('datasetList');
+                list.innerHTML = '';
+                data.datasets.forEach(dataset => {
+                    const item = document.createElement('a');
+                    item.href = '#';
+                    item.className = 'list-group-item list-group-item-action';
+                    item.setAttribute('data-dataset', dataset.name);
+                    item.innerHTML = `
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">${dataset.name}</h6>
+                            <small>文件数: ${dataset.file_count}</small>
+                        </div>
+                        <p class="mb-1">路径: ${dataset.path}</p>
+                    `;
+                    item.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        document.querySelectorAll('#datasetList a').forEach(a => a.classList.remove('active'));
+                        this.classList.add('active');
+                        document.getElementById('startAnalysisBtn').disabled = false;
+                    });
+                    list.appendChild(item);
+                });
+            }
+        })
+        .catch(error => console.error('加载数据集失败:', error));
+}
+
+// 文件上传处理
+document.getElementById('uploadForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const fileInput = document.getElementById('fileInput');
+    const file = fileInput.files[0];
+    if (!file) {
+        alert('请选择文件');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const xhr = new XMLHttpRequest();
+    xhr.upload.addEventListener('progress', function(e) {
+        if (e.lengthComputable) {
+            const percent = Math.round((e.loaded / e.total) * 100);
+            document.getElementById('uploadProgress').style.width = percent + '%';
+            document.getElementById('uploadProgress').textContent = percent + '%';
+        }
+    });
+
+    xhr.addEventListener('load', function() {
+        if (xhr.status === 200) {
+            const response = JSON.parse(xhr.responseText);
+            if (response.status === 'success') {
+                // 开始监听处理进度
+                const processProgress = document.getElementById('processProgress');
+                processProgress.style.width = '0%';
+                processProgress.textContent = '处理中 0%';
+                processProgress.style.display = 'block';
+
+                // 使用EventSource监听处理进度
+                const eventSource = new EventSource('/process_progress');
+                eventSource.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    if (data.status === 'progress') {
+                        processProgress.style.width = data.progress + '%';
+                        processProgress.textContent = '处理中 ' + data.progress + '%';
+                    } else if (data.status === 'completed') {
+                        processProgress.style.width = '100%';
+                        processProgress.textContent = '处理完成';
+                        eventSource.close();
+                        alert('文件处理完成');
+                    } else if (data.status === 'error') {
+                        processProgress.style.width = '0%';
+                        processProgress.textContent = '处理失败';
+                        eventSource.close();
+                        alert('文件处理失败: ' + data.message);
+                    }
+                };
+            } else {
+                alert('文件上传失败: ' + response.message);
+            }
+        } else {
+            alert('文件上传失败');
+        }
+    });
+
+    xhr.addEventListener('error', function() {
+        alert('文件上传失败');
+    });
+
+    xhr.open('POST', '/historical_analysis');
+    xhr.send(formData);
+});
+
+// 开始分析
+document.getElementById('startAnalysisBtn').addEventListener('click', function() {
+    const model = document.getElementById('modelSelect').value;
+    if (!model) {
+        alert('请选择检测模型');
+        return;
+    }
+
+    // 获取选中的数据集
+    const selectedDataset = document.querySelector('#datasetList a.active');
+    if (!selectedDataset) {
+        alert('请选择要分析的数据集');
+        return;
+    }
+
+    // 发送分析请求
+    fetch('/analyze_data', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            model: model,
+            dataset: selectedDataset.getAttribute('data-dataset')
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            // 更新图表
+            updateCharts(data.data);
+            // 更新结果表格
+            updateResultTable(data.data);
+        } else {
+            alert('分析失败: ' + data.message);
+        }
+    })
+    .catch(error => console.error('分析失败:', error));
+});
+
+// 更新图表
+function updateCharts(data) {
+    // 更新流量图表
+    if (data.traffic) {
+        trafficOption.xAxis.data = data.traffic.map(item => item.time);
+        trafficOption.series[0].data = data.traffic.map(item => item.value);
+        trafficChart.setOption(trafficOption);
+    }
+
+    // 更新异常检测图表
+    if (data.anomalies) {
+        anomalyOption.series[0].data = data.anomalies;
+        anomalyChart.setOption(anomalyOption);
+    }
+}
+
+// 更新结果表格
+function updateResultTable(data) {
+    const tbody = document.getElementById('resultTable');
+    tbody.innerHTML = '';
+
+    if (data.details) {
+        data.details.forEach(item => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${item.time}</td>
+                <td>${item.size}</td>
+                <td>${item.packet_count}</td>
+                <td>${item.anomaly_type || '正常'}</td>
+                <td>${item.confidence}%</td>
+            `;
+            tbody.appendChild(row);
+        });
+    }
+}
+
+// 页面加载时初始化
+loadModels();
+loadDatasets();
+
+// 窗口大小改变时重绘图表
+window.addEventListener('resize', function() {
+    trafficChart.resize();
+    anomalyChart.resize();
+});
+</script>
+{% endblock %}

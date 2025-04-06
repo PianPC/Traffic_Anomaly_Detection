@@ -1,5 +1,5 @@
 #
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, Response
 import logging
 import os
 import json
@@ -15,6 +15,8 @@ import numpy as np
 from scapy.all import sniff, wrpcap
 import sys
 from data_processor import DataConverter
+from scapy.all import rdpcap, TCP, UDP, IP
+from decimal import Decimal
 
 app = Flask(
     __name__,                   # 告诉 Flask 当前模块（文件）的名称，用于定位项目的根目录
@@ -28,7 +30,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 app.config['ORIGINAL_DATA_FOLDER'] = os.path.join(BASE_DIR, 'originaldata')  # 原始数据存储目录
 app.config['DATASET_FOLDER'] = os.path.join(BASE_DIR, 'dataset')            # 处理后的数据集目录
 app.config['MODEL_FOLDER'] = os.path.join(BASE_DIR, 'trained_models')        # 训练好的模型目录
-app.config['MAX_CONTENT_LENGTH'] = None     # 16 * 1024 * 1024  # 上传文件大小限制（16MB）
+app.config['MAX_CONTENT_LENGTH'] = None  # 移除文件大小限制
 app.config['UPLOAD_FOLDER'] = os.path.join(BASE_DIR, 'uploads')              # 文件上传目录
 
 # 创建必要的文件目录
@@ -159,6 +161,7 @@ def realtime_monitor():
 
 @app.route('/get_interfaces')
 def get_interfaces():
+    """获取可用的网络接口列表"""
     try:
         interfaces = []
         for interface, stats in psutil.net_if_stats().items():
@@ -167,12 +170,19 @@ def get_interfaces():
                 interfaces.append({
                     'name': interface,
                     'is_up': stats.isup,
-                    'speed': stats.speed,
+                    'speed': stats.speed if stats.speed > 0 else 'Unknown',
                     'mtu': stats.mtu
                 })
-        return jsonify({'status': 'success', 'interfaces': interfaces})
+        return jsonify({
+            'status': 'success',
+            'interfaces': interfaces
+        })
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)})
+        app.logger.error(f"获取网络接口失败: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        })
 
 @app.route('/get_monitor_data')
 def get_monitor_data():
@@ -222,7 +232,7 @@ def get_datasets():
 
 @app.route('/historical_analysis', methods=['GET', 'POST'])
 def historical_analysis():
-    # 获取系统状态
+    # 获取系统状态（保持不变）
     system_status = {
         'cpu_usage': psutil.cpu_percent(interval=1),
         'memory_usage': psutil.virtual_memory().percent,
@@ -233,106 +243,153 @@ def historical_analysis():
 
     if request.method == 'POST':
         if 'file' not in request.files:
-            app.logger.error("没有文件被上传")
-            return jsonify({'status': 'error', 'message': '没有文件'})
+            return jsonify({'status': 'error', 'message': '没有文件被上传'})
 
         file = request.files['file']
         if file.filename == '':
-            app.logger.error("文件名为空")
             return jsonify({'status': 'error', 'message': '没有选择文件'})
 
         if file:
             try:
-                # 检查文件大小
-                file.seek(0, 2)  # 移动到文件末尾
-                file_size = file.tell()  # 获取文件大小
-                file.seek(0)  # 重置文件指针到开始
+                # 检查文件大小（保持不变）
+                file.seek(0, 2)
+                file_size = file.tell()
+                file.seek(0)
 
-                if file_size > app.config['MAX_CONTENT_LENGTH']:
-                    app.logger.error(f"文件大小超过限制: {file_size} bytes")
+                if app.config['MAX_CONTENT_LENGTH'] and file_size > app.config['MAX_CONTENT_LENGTH']:
                     return jsonify({'status': 'error', 'message': '文件大小超过限制'})
 
-                # 创建时间戳目录
+                # 创建目录结构
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 dataset_name = f"data_{timestamp}"
-
-                # 创建原始数据目录
-                original_dir = os.path.join(app.config['ORIGINAL_DATA_FOLDER'], dataset_name)
+                original_dir = os.path.join(app.config['ORIGINAL_DATA_FOLDER'], 'historical_analysis', dataset_name)
+                dataset_dir = os.path.join(app.config['DATASET_FOLDER'], 'historical_analysis',dataset_name)
                 os.makedirs(original_dir, exist_ok=True)
-                app.logger.info(f"创建原始数据目录: {original_dir}")
-
-                # 创建数据集目录
-                dataset_dir = os.path.join(app.config['DATASET_FOLDER'], dataset_name)
                 os.makedirs(dataset_dir, exist_ok=True)
-                app.logger.info(f"创建数据集目录: {dataset_dir}")
 
                 # 保存原始文件
                 filename = secure_filename(file.filename)
                 original_path = os.path.join(original_dir, filename)
                 file.save(original_path)
-                app.logger.info(f"保存原始文件: {original_path}")
 
-                # 检查文件是否成功保存
-                if not os.path.exists(original_path):
-                    app.logger.error(f"文件保存失败: {original_path}")
-                    return jsonify({'status': 'error', 'message': '文件保存失败'})
-
-                # 调用数据处理脚本
-                try:
-                    converter = DataConverter()
-                    # 处理单个文件
-                    if filename.endswith('.pcap'):
-                        flows = converter.process_pcap(original_path)
-                    elif filename.endswith('.csv'):
-                        flows = converter.process_csv(original_path)
-                    else:
-                        return jsonify({'status': 'error', 'message': '不支持的文件格式'})
-
-                    if not flows:
-                        return jsonify({'status': 'error', 'message': '数据处理失败：没有提取到有效数据'})
-
-                    # 保存处理后的数据
-                    processed_filename = f"{os.path.splitext(filename)[0]}.json"
-                    processed_path = os.path.join(dataset_dir, processed_filename)
-                    with open(processed_path, 'w', encoding='utf-8') as f:
-                        json.dump(flows, f, ensure_ascii=False, indent=2)
-                    app.logger.info(f"保存处理后的数据到: {processed_path}")
-
-                    # 保存数据集信息
-                    info = {
-                        'name': dataset_name,
-                        'original_file': original_path,
-                        'processed_file': processed_path,
-                        'process_time': datetime.now().isoformat(),
-                        'file_count': 1,
-                        'flow_count': len(flows),
-                        'total_packets': sum(len(flow['packet_length']) for flow in flows)
-                    }
-                    info_path = os.path.join(dataset_dir, 'info.json')
-                    with open(info_path, 'w', encoding='utf-8') as f:
-                        json.dump(info, f, ensure_ascii=False, indent=2)
-
+                # 根据文件类型选择处理器
+                if filename.lower().endswith('.csv'):
+                    result = process_csv_file(original_path, dataset_dir)
+                elif filename.lower().endswith(('.pcap', '.pcapng')):
+                    result = process_pcap_file(original_path, dataset_dir)
+                else:
                     return jsonify({
-                        'status': 'success',
-                        'message': '文件处理完成',
-                        'data': {
-                            'original_file': original_path,
-                            'processed_file': processed_path,
-                            'dataset_name': dataset_name,
-                            'flow_count': len(flows),
-                            'total_packets': sum(len(flow['packet_length']) for flow in flows)
-                        }
+                        'status': 'error',
+                        'message': '不支持的文件类型',
+                        'supported_types': ['csv', 'pcap', 'pcapng']
                     })
 
-                except Exception as e:
-                    app.logger.error(f"数据处理失败: {str(e)}")
-                    return jsonify({'status': 'error', 'message': f'数据处理失败: {str(e)}'})
+                if result['status'] == 'error':
+                    return jsonify(result)
+
+                return jsonify({
+                    'status': 'success',
+                    'message': '文件上传和处理完成',
+                    'dataset_name': dataset_name,
+                    'file_type': 'PCAP' if filename.lower().endswith(('.pcap', '.pcapng')) else 'CSV'
+                })
 
             except Exception as e:
                 app.logger.error(f"文件处理错误: {str(e)}", exc_info=True)
-                return jsonify({'status': 'error', 'message': f'文件处理错误: {str(e)}'})
+                return jsonify({'status': 'error', 'message': str(e)})
 
     return render_template('historical_analysis.html', system_status=system_status)
+
+def process_pcap_file(file_path, output_dir):
+    """处理PCAP文件，按流分类保存为JSON格式"""
+    try:
+        # 读取PCAP文件
+        packets = rdpcap(file_path)
+        if len(packets) == 0:
+            return {'status': 'error', 'message': 'PCAP文件为空'}
+
+        # 自定义JSON编码器
+        class DecimalEncoder(json.JSONEncoder):
+            def default(self, o):
+                if isinstance(o, Decimal):
+                    return float(o)
+                return super().default(o)
+
+        # 用于存储流数据的字典
+        flows = {}
+
+        # 遍历所有数据包并分类
+        for pkt in packets:
+            if not (IP in pkt and (TCP in pkt or UDP in pkt)):
+                continue
+
+            # 提取五元组作为流标识
+            src_ip = pkt[IP].src
+            dst_ip = pkt[IP].dst
+            src_port = pkt[TCP].sport if TCP in pkt else pkt[UDP].sport
+            dst_port = pkt[TCP].dport if TCP in pkt else pkt[UDP].dport
+            protocol = 'TCP' if TCP in pkt else 'UDP'
+
+            # 创建流标识键（双向流合并）
+            forward_key = (src_ip, src_port, dst_ip, dst_port, protocol)
+            backward_key = (dst_ip, dst_port, src_ip, src_port, protocol)
+
+            # 确定流方向
+            if forward_key in flows:
+                flow_key = forward_key
+                direction = 1  # 正向
+            elif backward_key in flows:
+                flow_key = backward_key
+                direction = -1  # 反向
+            else:
+                flow_key = forward_key
+                direction = 1  # 新流默认正向
+                flows[flow_key] = {'packets': [], 'timestamps': []}
+
+            # 记录包信息和时间戳
+            flows[flow_key]['packets'].append({
+                'length': len(pkt) * direction,
+                'time': float(pkt.time)  # 转换为float
+            })
+
+        # 转换为目标格式
+        results = []
+        for flow_key, flow_data in flows.items():
+            if len(flow_data['packets']) < 2:  # 忽略单包流
+                continue
+
+            # 按时间排序包
+            sorted_packets = sorted(flow_data['packets'], key=lambda x: x['time'])
+
+            # 提取包长序列
+            packet_length = [pkt['length'] for pkt in sorted_packets]
+
+            # 计算到达时间间隔
+            timestamps = [pkt['time'] for pkt in sorted_packets]
+            arrive_time_delta = [0]  # 第一个包为0
+            for i in range(1, len(timestamps)):
+                delta = timestamps[i] - timestamps[i-1]
+                arrive_time_delta.append(max(delta, 1e-6))  # 避免0间隔
+
+            results.append({
+                'packet_length': packet_length,
+                'arrive_time_delta': arrive_time_delta
+            })
+
+        # 保存为JSON（单个文件包含所有流）
+        if results:
+            filename = os.path.basename(file_path).rsplit('.', 1)[0] + '.json'
+            output_file = os.path.join(output_dir, filename)
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(results, f, ensure_ascii=False, indent=2, cls=DecimalEncoder)
+            app.logger.info(f"已保存{len(results)}条流到{output_file}")
+            return {'status': 'success', 'message': 'PCAP处理完成'}
+        else:
+            return {'status': 'error', 'message': '未提取到有效网络流'}
+
+    except Exception as e:
+        app.logger.error(f"处理PCAP文件时出错: {str(e)}", exc_info=True)
+        return {'status': 'error', 'message': str(e)}
 
 @app.route('/analyze_data', methods=['POST'])
 def analyze_data():
@@ -525,6 +582,158 @@ def get_available_models():
             'message': str(e)
         }), 500
 
+def process_csv_file(file_path, output_dir):
+    """处理CSV文件，按Label分类保存为JSON格式"""
+    try:
+        # 读取CSV文件
+        df = pd.read_csv(file_path, skipinitialspace=True)
+
+        # 定义必需列（兼容带空格的列名）
+        required_columns = {
+            'Label',
+            'Total Fwd Packets',
+            'Total Backward Packets',
+            'Total Length of Fwd Packets',
+            'Total Length of Bwd Packets',
+            'Flow Duration',
+            'Flow IAT Mean',
+            'Fwd IAT Mean',
+            'Bwd IAT Mean',
+            'Fwd IAT Total',
+            'Bwd IAT Total'
+        }
+
+        # 检查列名（不区分大小写和前后空格）
+        existing_columns = {col.strip().lower(): col for col in df.columns}
+        missing_cols = []
+        for req_col in required_columns:
+            if req_col.strip().lower() not in existing_columns:
+                missing_cols.append(req_col)
+
+        if missing_cols:
+            app.logger.error(f"CSV文件缺少必要列: {missing_cols}，实际列名: {df.columns.tolist()}")
+            return {'status': 'error', 'message': f'缺少必要列: {missing_cols}'}
+
+        # 创建标准化列名映射（保留原始列名）
+        col_mapping = {
+            existing_columns[req_col.strip().lower()]: req_col
+            for req_col in required_columns
+        }
+        df = df.rename(columns=col_mapping)
+
+        # 按Label分组处理数据
+        results = {}
+        for label, group in df.groupby('Label'):
+            samples = []
+            for _, row in group.iterrows():
+                # 提取包长序列
+                packet_length = []
+                # 前向包
+                if row['Total Fwd Packets'] > 0:
+                    # 使用平均包长，但保留方向信息
+                    avg_fwd_length = row['Total Length of Fwd Packets'] / row['Total Fwd Packets']
+                    packet_length.extend([avg_fwd_length] * int(row['Total Fwd Packets']))
+                # 反向包
+                if row['Total Backward Packets'] > 0:
+                    avg_bwd_length = row['Total Length of Bwd Packets'] / row['Total Backward Packets']
+                    packet_length.extend([-avg_bwd_length] * int(row['Total Backward Packets']))
+
+                # 提取到达时间间隔
+                arrive_time_delta = [0]  # 第一个包的时间间隔为0
+                total_packets = int(row['Total Fwd Packets'] + row['Total Backward Packets'])
+
+                if total_packets > 1:
+                    # 计算前向包的时间间隔
+                    if row['Total Fwd Packets'] > 1:
+                        fwd_iat = row['Fwd IAT Total'] / (row['Total Fwd Packets'] - 1)
+                        for i in range(1, int(row['Total Fwd Packets'])):
+                            arrive_time_delta.append(arrive_time_delta[-1] + fwd_iat)
+
+                    # 计算反向包的时间间隔
+                    if row['Total Backward Packets'] > 0:
+                        bwd_iat = row['Bwd IAT Total'] / row['Total Backward Packets']
+                        for i in range(int(row['Total Backward Packets'])):
+                            arrive_time_delta.append(arrive_time_delta[-1] + bwd_iat)
+
+                if packet_length:
+                    samples.append({
+                        'packet_length': packet_length,
+                        'arrive_time_delta': arrive_time_delta
+                    })
+
+            if samples:
+                # 确保label是有效的文件名
+                safe_label = label.replace('/', '_').replace('\\', '_')
+                output_file = os.path.join(output_dir, f"{safe_label}.json")
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(samples, f, ensure_ascii=False, indent=2)
+                app.logger.info(f"已保存{len(samples)}个样本到{output_file}")
+
+        return {'status': 'success', 'message': '文件处理完成'}
+
+    except Exception as e:
+        app.logger.error(f"处理CSV文件时出错: {str(e)}")
+        return {'status': 'error', 'message': str(e)}
+
+@app.route('/upload_training_dataset', methods=['POST'])
+def upload_training_dataset():
+    """处理训练数据集上传"""
+    try:
+        # 1. 基础验证
+        if 'files[]' not in request.files:
+            return jsonify({'status': 'error', 'message': '没有文件被上传'})
+
+        dataset_name = request.form.get('datasetName', '').strip()
+        if not dataset_name:
+            return jsonify({'status': 'error', 'message': '未提供数据集名称'})
+
+        # 2. 创建目录
+        originaldata_dir = os.path.join(app.config['ORIGINAL_DATA_FOLDER'], 'train_data', dataset_name)
+        os.makedirs(originaldata_dir, exist_ok=True)
+        dataset_dir = os.path.join(app.config['DATASET_FOLDER'], 'train_data', dataset_name)
+        os.makedirs(dataset_dir, exist_ok=True)
+
+        # 3. 处理文件上传
+        processed_files = []
+        for file in request.files.getlist('files[]'):
+            if not file.filename:
+                continue
+
+            filename = secure_filename(file.filename)
+            if not filename:  # 安全过滤
+                continue
+
+            file_path = os.path.join(originaldata_dir, filename)
+            file.save(file_path)
+            processed_files.append(filename)
+
+            # 4. 自动处理CSV文件（依赖process_csv_file的完善校验）
+            if filename.endswith('.csv'):
+                result = process_csv_file(file_path, dataset_dir)
+            #
+            # 用于扩展其他格式的文件处理
+            # elif filename.endswith('.pcap'):
+            #     result = process_pcap_file(file_path, dataset_dir)
+            # else:
+            #     continue  # 跳过不支持的类型
+
+            if result.get('status') == 'error':
+                return jsonify(result)
+
+        return jsonify({
+            'status': 'success',
+            'message': '文件上传和处理完成',
+            'dataset_name': dataset_name,
+            'processed_files': processed_files
+        })
+
+    except Exception as e:
+        app.logger.error(f"上传失败: {str(e)}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': f'上传失败: {str(e)}'
+        })
+
 def monitor_traffic(session_id, capture_duration):
     global is_monitoring
     session_data = monitoring_data['sessions'][session_id]
@@ -675,6 +884,21 @@ def train_model(model, dataset):
     except Exception as e:
         app.logger.error(f"训练模型时出错: {str(e)}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/process_progress')
+def process_progress():
+    """处理进度接口"""
+    def generate():
+        try:
+            # 模拟处理进度
+            for i in range(101):
+                yield f"data: {json.dumps({'status': 'progress', 'progress': i})}\n\n"
+                time.sleep(0.1)
+            yield f"data: {json.dumps({'status': 'completed'})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'status': 'error', 'message': str(e)})}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream')
 
 if __name__ == '__main__':
     # 确保上传目录存在

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <!-- 快速访问 -->
+    <div class="card">
+        <div class="card-header">
+            <i class="fas fa-rocket me-2"></i>快速访问
+        </div>
+        <div class="card-body">
+            <div class="row justify-content-center">
+                <div class="col-md-4 text-center">
+                    <a href="/realtime_monitor" class="btn btn-primary btn-lg w-100 mb-3">
+                        <i class="fas fa-chart-line me-2"></i>实时流量监测
+                    </a>
+                </div>
+                <div class="col-md-4 text-center">
+                    <a href="/historical_analysis" class="btn btn-success btn-lg w-100 mb-3">
+                        <i class="fas fa-history me-2"></i>历史数据分析
+                    </a>
+                </div>
+                <div class="col-md-4 text-center">
+                    <a href="/model_training" class="btn btn-info btn-lg w-100 mb-3">
+                        <i class="fas fa-brain me-2"></i>模型训练
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
