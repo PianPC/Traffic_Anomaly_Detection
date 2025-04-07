@@ -10,45 +10,65 @@
         <div class="row mb-4">
             <div class="col-md-8">
                 <div class="card">
-                    <div class="card-header">上传训练数据集</div>
+                    <div class="card-header">
+                        <h5 class="mb-0">数据集上传</h5>
+                    </div>
                     <div class="card-body">
                         <form id="uploadForm" enctype="multipart/form-data">
                             <div class="mb-3">
-                                <label class="form-label">数据集名称</label>
-                                <input type="text" class="form-control" id="datasetName" required>
+                                <label for="datasetName" class="form-label">数据集名称</label>
+                                <input type="text" class="form-control" id="datasetName" name="datasetName" required>
                             </div>
                             <div class="mb-3">
-                                <label class="form-label">选择文件</label>
-                                <input type="file" class="form-control" id="fileInput" accept=".csv" multiple required>
+                                <label for="files" class="form-label">选择文件</label>
+                                <input type="file" class="form-control" id="files" name="files[]" multiple required>
                             </div>
-                            <div class="progress mb-3" style="height: 20px;">
-                                <div class="progress-bar" id="uploadProgress" role="progressbar" style="width: 0%">0%</div>
-                            </div>
-                            <div class="progress mb-3" style="height: 20px;">
-                                <div class="progress-bar progress-bar-striped progress-bar-animated" id="processProgress" role="progressbar" style="width: 0%">处理中 0%</div>
-                            </div>
-                            <button type="submit" class="btn btn-primary" id="uploadBtn">上传文件</button>
+                            <button type="submit" class="btn btn-primary">上传</button>
                         </form>
+
+                        <!-- 上传进度条 -->
+                        <div class="mt-3" id="uploadProgress" style="display: none;">
+                            <div class="progress">
+                                <div class="progress-bar" role="progressbar" style="width: 0%"></div>
+                            </div>
+                            <small class="text-muted">上传进度: <span id="uploadPercent">0%</span></small>
+                        </div>
+
+                        <!-- 处理状态显示 -->
+                        <div class="mt-3" id="processingStatus" style="display: none;">
+                            <div class="d-flex align-items-center">
+                                <div class="spinner-border text-primary me-2" role="status" id="processingSpinner">
+                                    <span class="visually-hidden">处理中...</span>
+                                </div>
+                                <div class="text-primary" id="processingText">正在处理文件...</div>
+                                <div class="ms-2" id="processingIcon" style="display: none;">
+                                    <i class="fas fa-check-circle text-success"></i>
+                                </div>
+                            </div>
+                            <div class="mt-2">
+                                <small class="text-muted" id="processingDetail">正在转换文件格式...</small>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
             <div class="col-md-4">
                 <div class="card">
-                    <div class="card-header">数据集列表</div>
+                    <div class="card-header">训练设置</div>
                     <div class="card-body">
-                        <div class="card mb-3">
-                            <div class="card-header" data-bs-toggle="collapse" data-bs-target="#datasetList" aria-expanded="false">
-                                <i class="fas fa-database me-2"></i>数据集列表
-                                <i class="fas fa-chevron-down float-end"></i>
-                            </div>
-                            <div id="datasetList" class="collapse">
-                                <div class="card-body">
-                                    <div class="list-group" id="datasetListGroup">
-                                        <!-- 数据集列表将通过JavaScript动态添加 -->
-                                    </div>
-                                </div>
-                            </div>
+                        <div class="mb-3">
+                            <label class="form-label">选择数据集</label>
+                            <select class="form-select" id="datasetSelect">
+                                <option value="">请选择数据集</option>
+                            </select>
                         </div>
+                        <div class="mb-3">
+                            <label class="form-label">选择模型</label>
+                            <select class="form-select" id="modelSelect">
+                                <option value="">请选择模型</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary w-100" id="startTrainingBtn">开始训练</button>
                     </div>
                 </div>
             </div>
@@ -256,81 +276,94 @@ metricsChart.setOption(metricsOption);
 confusionMatrix.setOption(confusionMatrixOption);
 rocCurve.setOption(rocOption);
 
-// 文件上传处理
+// 检查处理状态
+function checkProcessingStatus() {
+    fetch('/check_processing_status')
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'processing') {
+                // 显示处理中状态
+                document.getElementById('processingSpinner').style.display = 'block';
+                document.getElementById('processingIcon').style.display = 'none';
+                document.getElementById('processingText').textContent = '正在处理文件...';
+                document.getElementById('processingDetail').textContent = '正在转换文件格式...';
+                setTimeout(checkProcessingStatus, 1000);
+            } else if (data.status === 'completed') {
+                // 显示处理完成状态
+                document.getElementById('processingSpinner').style.display = 'none';
+                document.getElementById('processingIcon').style.display = 'block';
+                document.getElementById('processingText').textContent = '处理完成';
+                document.getElementById('processingDetail').textContent = '文件已成功转换为JSON格式';
+                loadDatasets(); // 刷新数据集列表
+            }
+        })
+        .catch(error => {
+            console.error('检查处理状态时出错:', error);
+            // 发生错误时显示错误状态
+            document.getElementById('processingSpinner').style.display = 'none';
+            document.getElementById('processingIcon').style.display = 'block';
+            document.getElementById('processingIcon').innerHTML = '<i class="fas fa-times-circle text-danger"></i>';
+            document.getElementById('processingText').textContent = '处理失败';
+            document.getElementById('processingDetail').textContent = '文件处理过程中发生错误';
+        });
+}
+
+// 修改文件上传处理函数
 document.getElementById('uploadForm').addEventListener('submit', function(e) {
     e.preventDefault();
-    const fileInput = document.getElementById('fileInput');
-    const datasetName = document.getElementById('datasetName').value;
-    const files = fileInput.files;
 
-    if (!datasetName) {
-        alert('请输入数据集名称');
-        return;
-    }
-
-    if (files.length === 0) {
-        alert('请选择文件');
-        return;
-    }
-
-    const formData = new FormData();
-    formData.append('datasetName', datasetName);
-    for (let i = 0; i < files.length; i++) {
-        formData.append('files[]', files[i]);
-    }
-
+    const formData = new FormData(this);
     const xhr = new XMLHttpRequest();
+
+    // 重置状态显示
+    document.getElementById('uploadProgress').style.display = 'block';
+    document.getElementById('processingStatus').style.display = 'none';
+    document.getElementById('processingSpinner').style.display = 'none';
+    document.getElementById('processingIcon').style.display = 'none';
+
     xhr.upload.addEventListener('progress', function(e) {
         if (e.lengthComputable) {
             const percent = Math.round((e.loaded / e.total) * 100);
-            document.getElementById('uploadProgress').style.width = percent + '%';
-            document.getElementById('uploadProgress').textContent = percent + '%';
+            document.querySelector('.progress-bar').style.width = percent + '%';
+            document.getElementById('uploadPercent').textContent = percent + '%';
         }
     });
 
-    xhr.addEventListener('load', function() {
+    xhr.onload = function() {
         if (xhr.status === 200) {
             const response = JSON.parse(xhr.responseText);
             if (response.status === 'success') {
-                // 开始监听处理进度
-                const processProgress = document.getElementById('processProgress');
-                processProgress.style.width = '0%';
-                processProgress.textContent = '处理中 0%';
-                processProgress.style.display = 'block';
+                // 隐藏上传进度条，显示处理状态
+                document.getElementById('uploadProgress').style.display = 'none';
+                document.getElementById('processingStatus').style.display = 'block';
+                document.getElementById('processingSpinner').style.display = 'block';
+                document.getElementById('processingIcon').style.display = 'none';
 
-                // 使用EventSource监听处理进度
-                const eventSource = new EventSource('/process_progress');
-                eventSource.onmessage = function(event) {
-                    const data = JSON.parse(event.data);
-                    if (data.status === 'progress') {
-                        processProgress.style.width = data.progress + '%';
-                        processProgress.textContent = '处理中 ' + data.progress + '%';
-                    } else if (data.status === 'completed') {
-                        processProgress.style.width = '100%';
-                        processProgress.textContent = '处理完成';
-                        eventSource.close();
-                        alert('文件处理完成');
-                        loadDatasets(); // 刷新数据集列表
-                    } else if (data.status === 'error') {
-                        processProgress.style.width = '0%';
-                        processProgress.textContent = '处理失败';
-                        eventSource.close();
-                        alert('文件处理失败: ' + data.message);
-                    }
-                };
+                // 开始检查处理状态
+                checkProcessingStatus();
             } else {
-                alert('文件上传失败: ' + response.message);
+                // 显示错误状态
+                document.getElementById('uploadProgress').style.display = 'none';
+                document.getElementById('processingStatus').style.display = 'block';
+                document.getElementById('processingSpinner').style.display = 'none';
+                document.getElementById('processingIcon').style.display = 'block';
+                document.getElementById('processingIcon').innerHTML = '<i class="fas fa-times-circle text-danger"></i>';
+                document.getElementById('processingText').textContent = '上传失败';
+                document.getElementById('processingDetail').textContent = response.message;
             }
         } else {
-            alert('文件上传失败');
+            // 显示错误状态
+            document.getElementById('uploadProgress').style.display = 'none';
+            document.getElementById('processingStatus').style.display = 'block';
+            document.getElementById('processingSpinner').style.display = 'none';
+            document.getElementById('processingIcon').style.display = 'block';
+            document.getElementById('processingIcon').innerHTML = '<i class="fas fa-times-circle text-danger"></i>';
+            document.getElementById('processingText').textContent = '上传失败';
+            document.getElementById('processingDetail').textContent = '请重试';
         }
-    });
+    };
 
-    xhr.addEventListener('error', function() {
-        alert('文件上传失败');
-    });
-
-    xhr.open('POST', '/upload_training_dataset');
+    xhr.open('POST', '/upload_training_dataset', true);
     xhr.send(formData);
 });
 
@@ -340,25 +373,49 @@ function loadDatasets() {
         .then(response => response.json())
         .then(data => {
             if (data.status === 'success') {
-                const select = document.getElementById('datasetListGroup');
-                select.innerHTML = '';
-                data.datasets.forEach(dataset => {
-                    const option = document.createElement('div');
-                    option.className = 'list-group-item';
+                const select = document.getElementById('datasetSelect');
+                select.innerHTML = '<option value="">请选择数据集</option>';
+                data.train_datasets.forEach(dataset => {
+                    const option = document.createElement('option');
+                    option.value = dataset.name;
                     option.textContent = dataset.name;
                     select.appendChild(option);
                 });
-                document.getElementById('startTrainingBtn').disabled = false;
             }
         })
         .catch(error => console.error('加载数据集失败:', error));
 }
 
+// 加载模型列表
+function loadModels() {
+    fetch('/get_available_models')
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                const select = document.getElementById('modelSelect');
+                select.innerHTML = '<option value="">请选择模型</option>';
+                data.models.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model.name;
+                    option.textContent = `${model.name} (${model.type})`;
+                    select.appendChild(option);
+                });
+            }
+        })
+        .catch(error => console.error('加载模型列表失败:', error));
+}
+
 // 开始训练
 document.getElementById('startTrainingBtn').addEventListener('click', function() {
-    const dataset = document.getElementById('datasetListGroup').children[0].textContent;
+    const dataset = document.getElementById('datasetSelect').value;
+    const model = document.getElementById('modelSelect').value;
+
     if (!dataset) {
         alert('请选择数据集');
+        return;
+    }
+    if (!model) {
+        alert('请选择模型');
         return;
     }
 
@@ -369,7 +426,8 @@ document.getElementById('startTrainingBtn').addEventListener('click', function()
             'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-            dataset: dataset
+            dataset: dataset,
+            model: model
         })
     })
     .then(response => response.json())
@@ -451,6 +509,7 @@ function updateEvaluationCharts(evaluation) {
 // 初始化页面
 document.addEventListener('DOMContentLoaded', function() {
     loadDatasets();
+    loadModels();
     initCharts();
 });
 
@@ -462,3 +521,4 @@ window.addEventListener('resize', function() {
 });
 </script>
 {% endblock %}
+

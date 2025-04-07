@@ -119,55 +119,59 @@
 
     <!-- 系统状态更新脚本 -->
     <script>
-        function updateSystemStatus() {
+        function updateSystemStatus(status) {
+            if (status) {
+                document.getElementById('cpuUsage').textContent = `${status.cpu_usage}%`;
+                document.getElementById('memoryUsage').textContent = `${status.memory_usage}%`;
+                document.getElementById('diskUsage').textContent = `${status.disk_usage}%`;
+
+                // 更新网络接口列表
+                const interfaceList = document.getElementById('interfaceList');
+                interfaceList.innerHTML = '';
+                let activeCount = 0;
+
+                for (const [name, stats] of Object.entries(status.network_interfaces)) {
+                    if (name !== 'lo' && !name.startsWith('veth')) {
+                        const li = document.createElement('li');
+                        const a = document.createElement('a');
+                        a.className = 'dropdown-item';
+                        a.href = '#';
+                        a.textContent = `${name} (${stats.isup ? '活跃' : '不活跃'})`;
+                        li.appendChild(a);
+                        interfaceList.appendChild(li);
+                        if (stats.isup) activeCount++;
+                    }
+                }
+
+                document.getElementById('interfaceCount').textContent = activeCount;
+
+                if (interfaceList.children.length === 0) {
+                    const li = document.createElement('li');
+                    const a = document.createElement('a');
+                    a.className = 'dropdown-item';
+                    a.href = '#';
+                    a.textContent = '无可用接口';
+                    li.appendChild(a);
+                    interfaceList.appendChild(li);
+                }
+            }
+        }
+
+        // 系统状态检查
+        function checkSystemStatus() {
             fetch('/get_system_status')
                 .then(response => response.json())
                 .then(data => {
                     if (data.status === 'success') {
-                        const status = data.data;
-                        document.getElementById('cpuUsage').textContent = `${status.cpu_usage}%`;
-                        document.getElementById('memoryUsage').textContent = `${status.memory_usage}%`;
-                        document.getElementById('diskUsage').textContent = `${status.disk_usage}%`;
-
-                        // 更新网络接口列表
-                        const interfaceList = document.getElementById('interfaceList');
-                        interfaceList.innerHTML = '';
-                        let activeCount = 0;
-
-                        for (const [name, stats] of Object.entries(status.network_interfaces)) {
-                            if (name !== 'lo' && !name.startsWith('veth')) {
-                                const li = document.createElement('li');
-                                const a = document.createElement('a');
-                                a.className = 'dropdown-item';
-                                a.href = '#';
-                                a.textContent = `${name} (${stats.isup ? '已启用' : '已禁用'})`;
-                                li.appendChild(a);
-                                interfaceList.appendChild(li);
-                                if (stats.isup) activeCount++;
-                            }
-                        }
-
-                        document.getElementById('interfaceCount').textContent = activeCount;
-
-                        if (interfaceList.children.length === 0) {
-                            const li = document.createElement('li');
-                            const a = document.createElement('a');
-                            a.className = 'dropdown-item';
-                            a.href = '#';
-                            a.textContent = '无可用接口';
-                            li.appendChild(a);
-                            interfaceList.appendChild(li);
-                        }
+                        updateSystemStatus(data.data);
                     }
                 })
-                .catch(error => {
-                    console.error('获取系统状态失败:', error);
-                });
+                .catch(error => console.error('获取系统状态失败:', error));
         }
 
-        // 定期更新系统状态
-        setInterval(updateSystemStatus, 5000);
-        updateSystemStatus();
+        // 每15秒检查一次系统状态
+        setInterval(checkSystemStatus, 15000);
+        checkSystemStatus(); // 立即执行一次
     </script>
 
     <!-- 其他页面特定的脚本 -->
