@@ -104,11 +104,13 @@ class FSNet(object):
         self.config = config
         self.batch_size = config.batch_size
 
-        self.is_train = tf.get_variable("is_train", shape=[], dtype=tf.bool, trainable=False)
-        self.train_true = tf.assign(self.is_train, tf.constant(True, dtype=tf.bool))
-        self.train_false = tf.assign(self.is_train, tf.constant(False, dtype=tf.bool))
-        self.global_step = tf.get_variable('global_step', shape=[], dtype=tf.int32,
-                                           initializer=tf.constant_initializer(0), trainable=False)
+        with tf.variable_scope('FSNet', reuse=tf.AUTO_REUSE):
+            self.is_train = tf.get_variable("is_train", shape=[], dtype=tf.bool, trainable=False)
+            self.train_true = tf.assign(self.is_train, tf.constant(True, dtype=tf.bool))
+            self.train_false = tf.assign(self.is_train, tf.constant(False, dtype=tf.bool))
+            self.global_step = tf.get_variable('global_step', shape=[], dtype=tf.int32,
+                                            initializer=tf.constant_initializer(0), trainable=False)
+
         self.ids, self.label, self.flow = batch_data.get_next()
 
         print(self.flow)
@@ -137,13 +139,13 @@ class FSNet(object):
                                                      global_step=self.global_step)
 
     def _embedding(self, emb_dim, vac_num, inputs, scope='embedding'):
-        with tf.variable_scope(scope):
+        with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
             embedding = tf.get_variable('embedding', dtype=tf.float32, shape=[vac_num, emb_dim])
             seq = tf.nn.embedding_lookup(embedding, inputs)
         return seq
 
     def _encoder(self, hidden, layer, seq, scope='encoder'):
-        with tf.variable_scope(scope):
+        with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
             if self.is_train and self.config.keep_prob < 1:
                 seq = tf.nn.dropout(seq, self.config.keep_prob)
             gru = self._gru(hidden, layer, self.config.keep_prob, self.is_train)
@@ -155,14 +157,14 @@ class FSNet(object):
         return feature_input
 
     def _decoder(self, hidden, layer, inputs, scope='decoder'):
-        with tf.variable_scope(scope):
+        with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
             gru = self._gru(hidden, layer, self.config.keep_prob, self.is_train)
             feature, outputs = gru(inputs, self.len)
         return feature, outputs
 
     def _fusion(self, e_fea, d_fea, scope='fusion'):
         hidden = e_fea.shape.as_list()[-1]
-        with tf.variable_scope(scope):
+        with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
             fea = tf.concat([e_fea, d_fea, e_fea * d_fea], 1)
             if self.is_train and self.config.keep_prob < 1:
                 fea = tf.nn.dropout(fea, self.config.keep_prob)
@@ -171,14 +173,14 @@ class FSNet(object):
         return e_fea * g + (1 - g) * update_
 
     def _compress(self, feature, scope='compress'):
-        with tf.variable_scope(scope):
+        with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
             ff_ = tf.layers.dense(feature, 2 * self.config.hidden, use_bias=True, activation=tf.nn.selu, name='W1')
             if self.is_train and self.config.keep_prob < 1:
                 ff_ = tf.nn.dropout(ff_, self.config.keep_prob)
         return ff_
 
     def _reconstruct(self, inputs, vac_num, label, mask, scope='rec'):
-        with tf.variable_scope(scope):
+        with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
             logits = tf.layers.dense(inputs, self.config.hidden, activation=tf.nn.selu)
             logits = tf.layers.dense(logits, vac_num)
             logits = tf.reshape(logits, [-1, vac_num])
@@ -188,7 +190,7 @@ class FSNet(object):
         return loss
 
     def _classify(self, feature):
-        with tf.variable_scope('classify'):
+        with tf.variable_scope('classify', reuse=tf.AUTO_REUSE):
             logit = tf.layers.dense(feature, self.config.class_num, use_bias=True)
             self.logit = logit
             pred = tf.argmax(logit, axis=1)

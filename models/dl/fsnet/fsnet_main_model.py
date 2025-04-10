@@ -47,7 +47,7 @@ class model(abs_model):
         flags.DEFINE_string('test_json', test_record, 'the processed test json file')
         flags.DEFINE_string('train_meta', train_meta, 'the processed train number')
         flags.DEFINE_string('test_meta', test_meta, 'the processed test number')
-        flags.DEFINE_string('log_dir', log_dir, 'where to save the log')
+        flags.DEFINE_string('fsnet_log_dir', log_dir, 'where to save the log')
         flags.DEFINE_string('model_dir', log_dir, 'where to save the model')
         flags.DEFINE_string('data_dir', data_dir, 'where to read data')
         flags.DEFINE_integer('class_num', self.num_classes(), 'the class number')
@@ -140,7 +140,7 @@ class model(abs_model):
             return train.get_logit_online(config,flow)
         elif config.mode == 'get_logit':
             config.keep_prob = 1
-            return train.get_logit(config)            
+            return train.get_logit(config)
         else:
             print('unknown mode, only support train now')
             raise Exception
@@ -162,12 +162,24 @@ class model(abs_model):
         except Exception as exp:
             print(flow)
             raise exp
+
+    def predict(self, flow_data):
+        try:
+            # 加载训练好的模型
+            model = self.load_model()
+            # 对输入数据进行预测
+            prediction = model.predict(flow_data)
+            return prediction
+        except Exception as e:
+            print(f"预测错误: {str(e)}")
+            return None
+
 if __name__ == '__main__':
  for test_rate in [ 0.6]:
     print(test_rate)
-    dataset='twitter100'
+    dataset='train_data'
     fsnet_model = model(dataset, randseed= 128, splitrate=test_rate, max_len=200)
-    #fsnet_model.parser_raw_data()
+    # fsnet_model.parser_raw_data()
     fsnet_model.train()
     fsnet_model.test()
     print(test_rate)

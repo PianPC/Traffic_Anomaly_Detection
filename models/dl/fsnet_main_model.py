@@ -143,6 +143,6 @@ class model(abs_model):
     def test(self):
         self.fs_main(home=self.model, data_dir=self.data,mode='test')
 if __name__ == '__main__':
-    fsnet_model = model('app60', randseed= 128, splitrate=0.1)
+    fsnet_model = model('train_data', randseed= 128, splitrate=0.1)
     fsnet_model.train()
     #df_model.test()

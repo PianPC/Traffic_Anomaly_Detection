@@ -3,13 +3,14 @@ pandas
 scapy
 psutil
 netifaces
-numpy==1.22.4
 scipy==1.8.1
-scikit-learn==1.0.2
+scikit-learn
 torch
 dgl
 matplotlib
 seaborn
-tensorflow
 tqdm
-
+chardet
+numpy == 1.14.5
+tensorflow == 1.8.0
+protobuf==3.18.1
