@@ -1,18 +1,20 @@
+from models.dl.fsnet.fsnet_main_model import model as FSNetModel
+import os
 import tensorflow as tf
+import numpy as np
 
-# 指定模型目录
-model_dir = './data/fsnet_train_data_model/log'
-flow_data = './dataset/train_data/test.json'
+# 1. 加载模型
+model_service = FSNetModel('train_data_test', randseed=128, splitrate=0.6, max_len=200)
 
-# 加载计算图和权重
-sess = tf.Session()
-saver = tf.train.import_meta_graph(f'{model_dir}/model.ckpt-10000.meta')
-saver.restore(sess, tf.train.latest_checkpoint(model_dir))
+flow_data = [[66,-66,60,74,-60,-5894,-1514,-1514,-2889,-60,60,60]]
 
-# 获取输入/输出张量
-graph = tf.get_default_graph()
-input_tensor = graph.get_tensor_by_name('IteratorGetNext:2')  # 根据实际名称修改
-output_tensor = graph.get_tensor_by_name('classify/dense/BiasAdd:0')  # 根据实际名称修改
 
-# 执行预测
-predictions = sess.run(output_tensor, feed_dict={input_tensor: flow_data})
+
+
+# 3. 进行预测
+prediction = model_service.logit_online(flow_data)
+pred_label = int(np.argmax(prediction))
+print('---------------------------------------------------------------------------')
+print(pred_label)        # predicted label
+print(prediction)
+

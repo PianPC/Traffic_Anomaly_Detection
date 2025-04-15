@@ -112,7 +112,7 @@ def _predict_test(sess, model, num, class_num):
             feature_set[real_app].append(feature)
     import pickle
     with open('feature_set_FSNET.pkl','wb') as fp:
-        pickle.dump(feature_set, fp)    
+        pickle.dump(feature_set, fp)
     return real, pred
 
 

@@ -28,8 +28,8 @@
                 </select>
             </div>
             <div class="col-md-4">
-                <label class="form-label">监测时长（秒）</label>
-                <input type="number" class="form-control" id="durationInput" value="60" min="10" max="3600">
+                <label class="form-label">最小包数</label>
+                <input type="number" class="form-control" id="minPacketsInput" value="10" min="5" max="50">
             </div>
         </div>
 
@@ -37,6 +37,25 @@
             <div class="col-12">
                 <button class="btn btn-primary" id="startBtn">开始监测</button>
                 <button class="btn btn-danger" id="stopBtn" disabled>停止监测</button>
+            </div>
+        </div>
+
+        <div class="row mb-3">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">模型状态</h5>
+                        <p id="modelStatus" class="text-muted">模型未加载</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">捕获状态</h5>
+                        <p id="captureStatus" class="text-muted">未开始捕获</p>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -87,6 +106,36 @@
                 </div>
             </div>
         </div>
+
+        <!-- 修改异常流量显示区域 -->
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>异常流量检测结果</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-striped" id="anomalyTable">
+                                <thead>
+                                    <tr>
+                                        <th>时间</th>
+                                        <th>源IP:端口</th>
+                                        <th>目标IP:端口</th>
+                                        <th>协议</th>
+                                        <th>包数量</th>
+                                        <th>预测结果</th>
+                                        <th>置信度</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="anomalyTableBody">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}
@@ -130,13 +179,15 @@ let anomalyOption = {
         trigger: 'item',
         formatter: '{b}: {c} ({d}%)'
     },
+    legend: {
+        orient: 'vertical',
+        left: 'right',
+        data: []
+    },
     series: [{
         type: 'pie',
         radius: '70%',
-        data: [
-            { value: 0, name: '正常' },
-            { value: 0, name: '异常' }
-        ],
+        data: [],
         emphasis: {
             itemStyle: {
                 shadowBlur: 10,
@@ -212,32 +263,50 @@ function getSelectedInterfaces() {
     return interfaces;
 }
 
-// 加载模型列表
+// 加载模型列表**
 function loadModels() {
-    fetch('/get_models')
-        .then(response => response.json())
+    console.log('开始加载模型列表...');
+    const select = document.getElementById('modelSelect');
+    select.innerHTML = '<option value="">请选择模型</option>';
+
+    fetch('/get_available_models')
+        .then(response => {
+            console.log('获取模型列表响应状态:', response.status);
+            return response.json();
+        })
         .then(data => {
-            const modelSelect = document.getElementById('modelSelect');
-            modelSelect.innerHTML = '';
-            if (data.models && data.models.length > 0) {
-                data.models.forEach(model => {
+            console.log('获取模型列表响应数据:', data);
+            if (data.status === 'success') {
+                if (data.models && data.models.length > 0) {
+                    data.models.forEach(model => {
+                        console.log('添加模型选项:', model);
+                        const option = document.createElement('option');
+                        option.value = model.name;
+                        option.textContent = `${model.name} (${model.type})`;
+                        select.appendChild(option);
+                    });
+                    console.log('成功加载模型列表，共', data.models.length, '个模型');
+                } else {
+                    console.log('没有找到模型');
                     const option = document.createElement('option');
-                    option.value = model;
-                    option.text = model;
-                    modelSelect.appendChild(option);
-                });
+                    option.value = '';
+                    option.textContent = '没有可用的模型';
+                    select.appendChild(option);
+                }
             } else {
+                console.error('加载模型列表失败:', data.message);
                 const option = document.createElement('option');
                 option.value = '';
-                option.text = '暂无可用的检测模型';
-                option.disabled = true;
-                modelSelect.appendChild(option);
+                option.textContent = '加载模型列表失败: ' + data.message;
+                select.appendChild(option);
             }
         })
         .catch(error => {
             console.error('加载模型列表失败:', error);
-            const modelSelect = document.getElementById('modelSelect');
-            modelSelect.innerHTML = '<option value="" disabled>加载模型列表失败</option>';
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = '加载模型列表失败: ' + error.message;
+            select.appendChild(option);
         });
 }
 
@@ -275,42 +344,70 @@ function updateMonitorData() {
         .catch(error => console.error('更新监测数据失败:', error));
 }
 
-// 显示异常流量提示
-function showAnomalyAlert(details) {
+// 修改更新预测结果的函数
+function updatePredictions() {
+    fetch('/get_predictions')
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                const tbody = document.getElementById('anomalyTableBody');
+                data.predictions.forEach(prediction => {
+                    const row = document.createElement('tr');
+                    // 根据预测结果设置不同的样式
+                    if (prediction.prediction !== '0') {
+                        row.className = 'table-danger';
+                    }
+                    row.innerHTML = `
+                        <td>${new Date(prediction.timestamp * 1000).toLocaleTimeString()}</td>
+                        <td>${prediction.src_ip}:${prediction.src_port}</td>
+                        <td>${prediction.dst_ip}:${prediction.dst_port}</td>
+                        <td>${prediction.protocol}</td>
+                        <td>${prediction.packet_count}</td>
+                        <td>${prediction.prediction}</td>
+                        <td>${(prediction.confidence * 100).toFixed(2)}%</td>
+                    `;
+                    tbody.insertBefore(row, tbody.firstChild);
+
+                    // 保持表格最多显示100行
+                    if (tbody.children.length > 100) {
+                        tbody.removeChild(tbody.lastChild);
+                    }
+
+                    // 显示警告提示
+                    if (prediction.prediction !== '0') {
+                        showAnomalyAlert(prediction);
+                    }
+                });
+            }
+        })
+        .catch(error => console.error('获取预测结果失败:', error));
+}
+
+// 添加显示警告提示的函数
+function showAnomalyAlert(prediction) {
     const alertDiv = document.createElement('div');
     alertDiv.className = 'alert alert-danger alert-dismissible fade show mt-3';
     alertDiv.innerHTML = `
-        检测到异常流量！
-        <button type="button" class="btn btn-link" onclick="showAnomalyDetails(${JSON.stringify(details)})">查看详情</button>
+        <strong>检测到异常流量！</strong><br>
+        源IP: ${prediction.src_ip}:${prediction.src_port}<br>
+        目标IP: ${prediction.dst_ip}:${prediction.dst_port}<br>
+        协议: ${prediction.protocol}<br>
+        置信度: ${(prediction.confidence * 100).toFixed(2)}%
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     `;
     document.querySelector('.card-body').insertBefore(alertDiv, document.querySelector('.row'));
-}
 
-// 显示异常流量详情
-function showAnomalyDetails(details) {
-    const tbody = document.getElementById('anomalyDetailTable');
-    tbody.innerHTML = '';
-    details.forEach(detail => {
-        const row = document.createElement('tr');
-        row.innerHTML = `
-            <td>${detail.time}</td>
-            <td>${detail.src_ip}</td>
-            <td>${detail.dst_ip}</td>
-            <td>${detail.protocol}</td>
-            <td>${detail.anomaly_type}</td>
-            <td>${detail.confidence}%</td>
-        `;
-        tbody.appendChild(row);
-    });
-    new bootstrap.Modal(document.getElementById('anomalyDetailModal')).show();
+    // 5秒后自动关闭警告
+    setTimeout(() => {
+        alertDiv.remove();
+    }, 5000);
 }
 
 // 开始监测
 document.getElementById('startBtn').addEventListener('click', function() {
     const interfaces = getSelectedInterfaces();
     const model = document.getElementById('modelSelect').value;
-    const duration = document.getElementById('durationInput').value;
+    const minPackets = document.getElementById('minPacketsInput').value;
 
     if (interfaces.length === 0) {
         alert('请选择至少一个网络接口');
@@ -330,7 +427,7 @@ document.getElementById('startBtn').addEventListener('click', function() {
             action: 'start',
             interfaces: interfaces,
             model: model,
-            capture_duration: parseInt(duration)
+            min_packets: parseInt(minPackets)
         })
     })
     .then(response => response.json())
@@ -340,6 +437,9 @@ document.getElementById('startBtn').addEventListener('click', function() {
             document.getElementById('stopBtn').disabled = false;
             // 开始定期更新数据
             window.monitorInterval = setInterval(updateMonitorData, 1000);
+
+            // 启动预测更新
+            window.predictionInterval = setInterval(updatePredictions, 1000);
         } else {
             alert(data.message);
         }
@@ -364,6 +464,9 @@ document.getElementById('stopBtn').addEventListener('click', function() {
             this.disabled = true;
             document.getElementById('startBtn').disabled = false;
             clearInterval(window.monitorInterval);
+
+            // 停止预测更新
+            clearInterval(window.predictionInterval);
         } else {
             alert(data.message);
         }
@@ -380,5 +483,39 @@ window.addEventListener('resize', function() {
     trafficChart.resize();
     anomalyChart.resize();
 });
+
+function updateModelStatus() {
+    fetch('/model_status')
+        .then(response => response.json())
+        .then(data => {
+            const statusElement = document.getElementById('modelStatus');
+            if (data.loaded) {
+                statusElement.textContent = '模型已加载';
+                statusElement.className = 'text-success';
+            } else {
+                statusElement.textContent = '模型未加载';
+                statusElement.className = 'text-danger';
+            }
+        });
+}
+
+function updateCaptureStatus() {
+    fetch('/capture_status')
+        .then(response => response.json())
+        .then(data => {
+            const statusElement = document.getElementById('captureStatus');
+            if (data.capturing) {
+                statusElement.textContent = '正在捕获流量';
+                statusElement.className = 'text-success';
+            } else {
+                statusElement.textContent = '未开始捕获';
+                statusElement.className = 'text-muted';
+            }
+        });
+}
+
+// 定期更新状态
+setInterval(updateModelStatus, 5000);
+setInterval(updateCaptureStatus, 1000);
 </script>
 {% endblock %}

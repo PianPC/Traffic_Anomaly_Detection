@@ -4,7 +4,7 @@ import pickle
 import json
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
-
+import argparse
 
 import csv
 import re
@@ -312,32 +312,62 @@ def classify_and_clean_flows(input_dir, output_dir):
 
 
 
+def process_pcap_file(originaldata, inputcsv, dataset):
+
+    dataset_directory = originaldata
+    output_directory_step1 = f'temp/step1'
+    min_flow_packets = 1                       # 设置最小数据包个数
+    num_workers = 10  # 设置进程池中的最大工作进程数
+    # 处理数据集
+    process_dataset(dataset_directory, output_directory_step1, min_flow_packets, num_workers)
+
+    # 将csv文件中的flow_id和label提取出来，并去除label可能的前后空格
+    input_csv = inputcsv
+    output_csv = 'temp/with_flow_id.csv'
+    filter_csv_columns(input_csv, output_csv)
+
+    # 将json的flow_id与output_csv的flow_id进行匹配，将flow_id对应的Label添加到json中
+    json_directory = output_directory_step1  # 包含原始JSON文件的目录
+    csv_file = output_csv  # 包含flow_id和Label的CSV文件
+    output_directory_step2 = 'temp/step2'  # 输出目录
+    match_flow_ids_to_labels(json_directory, csv_file, output_directory_step2)
+
+    # 对添加上Label的json进行处理，首先，根据label添加到相应的json中，比如DDoS.json，Bot.json，Normal.json，这些json存放在dataset/train_data_test中
+    input_directory = output_directory_step2  # 包含带有Label的JSON文件的目录
+    output_directory_step3 = dataset  # 分类后的JSON文件输出目录
+    classify_and_clean_flows(
+        input_dir=input_directory,
+        output_dir=output_directory_step3
+    )
+
+
 if __name__ == "__main__":
 
     # # 将一个文件夹中多个pcap处理成json格式，json中包含flow_id、packet_length、arrive_time_delta
-    # dataset_directory = 'originaldata/test'  # 替换为您的数据集路径
-    # output_directory = 'dataset/test'         # 替换为您想要保存结果的路径
-    # min_flow_packets = 2                       # 设置最小数据包个数
+    # dataset_directory = 'originaldata/train_data_'  # 替换为您的数据集路径
+    # output_directory = 'dataset/train_data_history'         # 替换为您想要保存结果的路径
+    # min_flow_packets = 1                       # 设置最小数据包个数
     # num_workers = 10  # 设置进程池中的最大工作进程数
     # # 处理数据集
     # process_dataset(dataset_directory, output_directory, min_flow_packets, num_workers)
 
     # # 将csv文件中的flow_id和label提取出来，并去除label可能的前后空格
-    # input_csv = 'output/Friday-WorkingHours.csv'
-    # output_csv = 'output/Friday-WorkingHours-flow_id_label.csv'
+    # input_csv = 'output/Wednesday-WorkingHours.csv'
+    # output_csv = 'output/Wednesday-WorkingHours-flow_id_label.csv'
     # filter_csv_columns(input_csv, output_csv)
 
-    # 将json的flow_id与output_csv的flow_id进行匹配，将flow_id对应的Label添加到json中
-    json_directory = 'dataset/test'  # 包含原始JSON文件的目录
-    csv_file = 'output/Friday-WorkingHours-flow_id_label.csv'  # 包含flow_id和Label的CSV文件
-    output_directory = 'dataset/test_with_labels'  # 输出目录
-    match_flow_ids_to_labels(json_directory, csv_file, output_directory)
+    # # 将json的flow_id与output_csv的flow_id进行匹配，将flow_id对应的Label添加到json中
+    # json_directory = 'dataset/Thursday'  # 包含原始JSON文件的目录
+    # csv_file = 'output/Thursday-WorkingHours-flow_id_label.csv'  # 包含flow_id和Label的CSV文件
+    # output_directory = 'dataset/Thursday_with_labels'  # 输出目录
+    # match_flow_ids_to_labels(json_directory, csv_file, output_directory)
 
     # 对添加上Label的json进行处理，首先，根据label添加到相应的json中，比如DDoS.json，Bot.json，Normal.json，这些json存放在dataset/train_data_test中
-    input_directory = 'dataset/test_with_labels'  # 包含带有Label的JSON文件的目录
-    output_directory = 'dataset/train_data_test'  # 分类后的JSON文件输出目录
+    input_directory = 'dataset/Friday_with_labels'  # 包含带有Label的JSON文件的目录
+    output_directory = 'dataset/Friday_data_test'  # 分类后的JSON文件输出目录
     classify_and_clean_flows(
         input_dir=input_directory,
         output_dir=output_directory
     )
 
+    # main()

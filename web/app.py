@@ -1,5 +1,5 @@
 #
-from flask import Flask, render_template, request, jsonify, send_file, Response
+from flask import Flask, render_template, request, jsonify, send_file, Response, stream_with_context
 import logging
 import os
 import json
@@ -19,6 +19,10 @@ from decimal import Decimal
 import multiprocessing as mp
 from multiprocessing import Manager, Value, Array
 from functools import partial
+from collections import defaultdict
+from models.dl.fsnet.fsnet_main_model import model as FSNetModel
+import tensorflow as tf
+
 
 app = Flask(
     __name__,                   # 告诉 Flask 当前模块（文件）的名称，用于定位项目的根目录
@@ -31,15 +35,16 @@ BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 # 设置应用配置参数
 app.config['ORIGINAL_DATA_FOLDER'] = os.path.join(BASE_DIR, 'originaldata')  # 原始数据存储目录
 app.config['DATASET_FOLDER'] = os.path.join(BASE_DIR, 'dataset')            # 处理后的数据集目录
-app.config['MODEL_FOLDER'] = os.path.join(BASE_DIR, 'trained_models')        # 训练好的模型目录
+app.config['OUTPUT_FOLDER'] = os.path.join(BASE_DIR, 'output')              # 文件上传目录
+app.config['UPLOAD_FOLDER'] = os.path.join(BASE_DIR, 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = None  # 移除文件大小限制
-app.config['UPLOAD_FOLDER'] = os.path.join(BASE_DIR, 'uploads')              # 文件上传目录
+
 
 # 创建必要的文件目录
 for path in [
     app.config['ORIGINAL_DATA_FOLDER'],
     app.config['DATASET_FOLDER'],
-    app.config['MODEL_FOLDER'],
+    app.config['OUTPUT_FOLDER'],
     app.config['UPLOAD_FOLDER']
 ]:
     os.makedirs(path, exist_ok=True)  # exist_ok=True表示如果目录已存在不报错
@@ -53,6 +58,8 @@ current_model = None                 # 当前使用的模型
 current_interface = None             # 当前监控的网络接口
 model_predictor = None               # 模型预测器实例
 current_monitoring_session = None    # 当前监控会话
+capture_thread = None                # 数据包捕获线程
+stop_capture = False                 # 停止捕获标志
 
 # 进程管理器
 manager = None
@@ -88,6 +95,13 @@ processing_status = {
     'processed_files': 0
 }
 
+# 添加全局变量
+flow_buffer = defaultdict(dict)  # 存储每个流的包
+flow_timeout = 5  # 流的超时时间（秒）
+min_packets = 10  # 最小包数
+model_service = None  # 全局模型服务变量
+prediction_queue = queue.Queue()  # 预测结果队列
+
 def init_process_manager():
     global manager, process_progress
     if manager is None:
@@ -98,6 +112,7 @@ def init_process_manager():
             'processed_rows': 0
         })
 
+# 更新系统状态
 @app.route('/')
 def index():
     # 获取系统状态
@@ -111,6 +126,7 @@ def index():
     # 渲染index.html模板并传递系统状态数据
     # render_template 是 Flask 框架中用于渲染 HTML 模板的核心函数，它的作用是将动态数据与静态 HTML 模板结合，生成最终的网页内容返回给浏览器。
     return render_template('index.html', system_status=system_status)
+
 
 @app.route('/get_system_status')
 def get_system_status():
@@ -129,62 +145,6 @@ def get_system_status():
         return jsonify({'status': 'success', 'data': status})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})
-
-# 任何访问该URL的请求（无论GET/POST）都会触发 realtime_monitor() 函数。
-@app.route('/realtime_monitor', methods=['GET', 'POST'])
-def realtime_monitor():
-    # 获取系统状态
-    # 如果仅是由<a href="{{ url_for('realtime_monitor') }}">点击链接会发送 ​​GET 请求​​ 到 /realtime_monitor，就只更新系统状态
-    system_status = {
-        'cpu_usage': psutil.cpu_percent(interval=1),
-        'memory_usage': psutil.virtual_memory().percent,
-        'disk_usage': psutil.disk_usage('/').percent,
-        'network_interfaces': psutil.net_if_stats(),
-        'running_processes': len(psutil.pids())
-    }
-
-    if request.method == 'POST':
-        data = request.json
-        action = data.get('action')
-        if action == 'start':
-            model_name = data.get('model')
-            interfaces = data.get('interfaces', [])
-            capture_duration = data.get('capture_duration', 60)  # 默认1分钟
-
-            # 创建新的监控会话
-            session_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-            current_monitoring_session = session_id
-            monitoring_data['sessions'][session_id] = {
-                'start_time': datetime.now(),
-                'interfaces': interfaces,
-                'model': model_name,
-                'datasets': [], # 初始化空列表，用于存储捕获的数据集路径，['dataset_1.pcap', 'dataset_2.pcap']
-                'capture_duration': capture_duration
-            }
-
-            # 初始化模型
-            model_path = os.path.join(app.config['MODEL_FOLDER'], model_name)
-            if os.path.exists(model_path):
-                model_module = __import__(f'models.{model_name.split("_")[0]}.model', fromlist=['ModelPredictor'])
-                model_predictor = model_module.ModelPredictor(model_path)
-                is_monitoring = True
-
-                # 启动监控线程
-                threading.Thread(
-                    target=monitor_traffic,
-                    args=(session_id, capture_duration),
-                    daemon=True
-                ).start()
-
-                return jsonify({'status': 'success', 'message': '监控已启动'})
-            else:
-                return jsonify({'status': 'error', 'message': '模型不存在'})
-        elif action == 'stop':
-            is_monitoring = False
-            model_predictor = None
-            current_monitoring_session = None
-            return jsonify({'status': 'success', 'message': '监控已停止'})
-    return render_template('realtime_monitor.html', system_status=system_status)
 
 @app.route('/get_interfaces')
 def get_interfaces():
@@ -458,7 +418,7 @@ def process_pcap_chunk(packets, output_dir):
     """处理PCAP数据块（子进程函数）"""
     flows = {}
     for pkt in packets:
-        if not (IP in pkt and (TCP in pkt or UDP in pkt)):
+        if not IP in pkt and (TCP in pkt or UDP in pkt):
             continue
 
         # 获取IP层信息
@@ -666,28 +626,28 @@ def get_training_status():
         'status_message': '正在训练...' if training_status['is_training'] else '训练已完成'
     })
 
-@app.route('/get_models')
-def get_models():
-    """获取所有已训练好的模型"""
-    try:
-        models = []
-        model_dir = app.config['MODEL_FOLDER']
-        if os.path.exists(model_dir):
-            for model_name in os.listdir(model_dir):
-                model_path = os.path.join(model_dir, model_name)
-                if os.path.isdir(model_path):
-                    # 检查是否存在模型文件
-                    model_files = [f for f in os.listdir(model_path) if f.endswith('.h5') or f.endswith('.pth')]
-                    if model_files:
-                        models.append({
-                            'name': model_name,
-                            'path': model_path,
-                            'file_count': len(model_files)
-                        })
-        return jsonify({'status': 'success', 'models': models})
-    except Exception as e:
-        app.logger.error(f"获取模型列表错误: {str(e)}")
-        return jsonify({'status': 'error', 'message': str(e)})
+# @app.route('/get_models')
+# def get_models():
+#     """获取所有已训练好的模型"""
+#     try:
+#         models = []
+#         model_dir = app.config['MODEL_FOLDER']
+#         if os.path.exists(model_dir):
+#             for model_name in os.listdir(model_dir):
+#                 model_path = os.path.join(model_dir, model_name)
+#                 if os.path.isdir(model_path):
+#                     # 检查是否存在模型文件
+#                     model_files = [f for f in os.listdir(model_path) if f.endswith('.h5') or f.endswith('.pth')]
+#                     if model_files:
+#                         models.append({
+#                             'name': model_name,
+#                             'path': model_path,
+#                             'file_count': len(model_files)
+#                         })
+#         return jsonify({'status': 'success', 'models': models})
+#     except Exception as e:
+#         app.logger.error(f"获取模型列表错误: {str(e)}")
+#         return jsonify({'status': 'error', 'message': str(e)})
 
 @app.route('/get_available_models')
 def get_available_models():
@@ -741,41 +701,59 @@ def train_model():
                 'message': '缺少必要参数'
             })
 
+        # 获取虚拟环境路径
+        venv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.venv37')
+        if not os.path.exists(venv_path):
+            return jsonify({
+                'status': 'error',
+                'message': '虚拟环境不存在'
+            })
+
         # 构建训练命令
-        cmd = ['python', f'models/dl/{model_name}/{model_name}_main_model.py', '--dataset', dataset_name]
+        python_path = os.path.join(venv_path, 'Scripts', 'python.exe')
+        cmd = [python_path, f'models/dl/{model_name}/{model_name}_main_model.py', '--dataset', dataset_name]
 
-        # 启动训练进程
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            universal_newlines=True
-        )
 
-        # 存储进程信息
-        training_processes[process.pid] = {
-            'process': process,
-            'model': model_name,
-            'dataset': dataset_name,
-            'start_time': datetime.now().isoformat(),
-            'metrics': {
-                'steps': [],
-                'train_losses': [],
-                'train_accuracies': [],
-                'dev_losses': [],
-                'dev_accuracies': []
+        app.logger.info(f"使用虚拟环境执行命令: {' '.join(cmd)}")
+
+        # 创建字典保存训练进程的相关信息
+        process_info = {
+            'model': model_name,  # 训练的模型名称
+            'dataset': dataset_name,  # 使用的数据集名称
+            'start_time': datetime.now().isoformat(),  # 训练开始时间（ISO格式）
+            'progress': 0,  # 训练进度初始化为0
+            'metrics': {  # 用于保存训练过程中的各项指标
+                'steps': [],  # 训练步数
+                'train_losses': [],  # 训练损失值
+                'train_accuracies': [],  # 训练准确率
+                'dev_losses': [],  # 验证损失值
+                'dev_accuracies': []  # 验证准确率
             }
         }
 
-        # 启动线程监控训练输出
+        # 使用subprocess启动训练进程
+        process = subprocess.Popen(
+            cmd,  # 要执行的命令
+            stdout=subprocess.PIPE,  # 捕获标准输出
+            stderr=subprocess.PIPE,  # 捕获标准错误
+            text=True,  # 以文本模式处理输出
+            bufsize=1,  # 行缓冲
+            universal_newlines=True  # 统一换行符
+        )
+
+        # 将进程对象保存到进程信息字典中
+        process_info['process'] = process
+        # 将进程信息存入全局字典，以进程ID为键
+        training_processes[process.pid] = process_info
+
+        # 启动一个守护线程来监控训练输出
         threading.Thread(
-            target=monitor_training_output,
-            args=(process, process.pid),
-            daemon=True
+            target=monitor_training_output,  # 监控函数
+            args=(process, process.pid, process_info),  # 传入参数
+            daemon=True  # 设置为守护线程
         ).start()
 
+        app.logger.info(f"训练进程已启动，PID: {process.pid}")
         return jsonify({
             'status': 'success',
             'message': '训练已启动',
@@ -789,20 +767,24 @@ def train_model():
             'message': str(e)
         })
 
-def monitor_training_output(process, pid):
+def monitor_training_output(process, pid, process_info):
     """监控训练进程的输出"""
     try:
         while True:
+            # 读取进程输出的一行
             line = process.stdout.readline()
+            # 如果没有输出且进程已结束，则退出循环
             if not line and process.poll() is not None:
                 break
             if line:
                 # 解析训练进度
                 if 'Training:' in line:
+                    # 提取进度百分比
                     progress = line.split('|')[0].split(':')[1].strip()
                     if '%' in progress:
+                        # 转换为浮点数并更新进度
                         progress = float(progress.replace('%', ''))
-                        training_processes[pid]['progress'] = progress
+                        process_info['progress'] = progress
 
                 # 解析训练指标
                 if '[Step=' in line:
@@ -810,20 +792,26 @@ def monitor_training_output(process, pid):
                     if 'TRAIN batch' in line:
                         loss = float(line.split('loss: ')[1].split(',')[0])
                         accuracy = float(line.split('accuracy: ')[1].strip())
-                        training_processes[pid]['metrics']['steps'].append(step)
-                        training_processes[pid]['metrics']['train_losses'].append(loss)
-                        training_processes[pid]['metrics']['train_accuracies'].append(accuracy)
+                        process_info['metrics']['steps'].append(step)
+                        process_info['metrics']['train_losses'].append(loss)
+                        process_info['metrics']['train_accuracies'].append(accuracy)
                     elif 'DEV batch' in line:
                         loss = float(line.split('loss: ')[1].split(',')[0])
                         accuracy = float(line.split('accuracy: ')[1].strip())
-                        training_processes[pid]['metrics']['dev_losses'].append(loss)
-                        training_processes[pid]['metrics']['dev_accuracies'].append(accuracy)
+                        process_info['metrics']['dev_losses'].append(loss)
+                        process_info['metrics']['dev_accuracies'].append(accuracy)
 
                 # 解析评估结果
                 if 'precision' in line and 'recall' in line:
                     # 解析分类报告
                     metrics = parse_classification_report(line)
-                    training_processes[pid]['evaluation'] = metrics
+                    process_info['evaluation'] = metrics
+
+                # 更新全局训练状态
+                training_status['progress'] = process_info.get('progress', 0)
+                training_status['metrics'] = process_info.get('metrics', {})
+                if 'evaluation' in process_info:
+                    training_status['evaluation'] = process_info['evaluation']
 
     except Exception as e:
         app.logger.error(f"监控训练输出时出错: {str(e)}")
@@ -847,33 +835,39 @@ def parse_classification_report(report):
                     continue
     return metrics
 
-@app.route('/get_training_progress')
-def get_training_progress():
-    """获取训练进度数据"""
-    try:
-        pid = request.args.get('pid', type=int)
-        if pid not in training_processes:
-            return jsonify({'status': 'error', 'message': '训练进程不存在'})
+@app.route('/training_progress')
+def training_progress():
+    """获取训练进度"""
+    pid = request.args.get('pid', type=int)
+    def generate(pid):
+        try:
+            if not pid or pid not in training_processes:
+                yield f"data: {json.dumps({'status': 'error', 'message': '无效的训练进程ID'})}\n\n"
+                return
 
-        process_info = training_processes[pid]
-        if process_info['process'].poll() is not None:
-            # 训练已完成
-            return jsonify({
-                'status': 'completed',
-                'progress': 100,
-                'metrics': process_info['metrics'],
-                'evaluation': process_info.get('evaluation', {})
-            })
-        else:
-            # 训练进行中
-            return jsonify({
-                'status': 'training',
-                'progress': process_info.get('progress', 0),
-                'metrics': process_info['metrics']
-            })
-    except Exception as e:
-        app.logger.error(f"获取训练进度失败: {str(e)}")
-        return jsonify({'status': 'error', 'message': str(e)})
+            process_info = training_processes[pid]
+            while True:
+                if process_info['process'].poll() is not None:
+                    # 训练已完成
+                    yield f"data: {json.dumps({'status': 'completed', 'progress': process_info.get('progress', 0), 'metrics': process_info.get('metrics', {}), 'evaluation': process_info.get('evaluation', {})})}\n\n"
+                    break
+                else:
+                    # 训练进行中
+                    yield f"data: {json.dumps({'status': 'training', 'progress': process_info.get('progress', 0), 'metrics': process_info.get('metrics', {}), 'evaluation': process_info.get('evaluation', {})})}\n\n"
+                time.sleep(1)  # 每秒更新一次
+        except Exception as e:
+            app.logger.error(f"获取训练进度时出错: {str(e)}")
+            yield f"data: {json.dumps({'status': 'error', 'message': str(e)})}\n\n"
+
+    return Response(
+        stream_with_context(generate(pid)),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+        }
+    )
 
 @app.route('/upload_training_dataset', methods=['POST'])
 def upload_training_dataset():
@@ -890,6 +884,8 @@ def upload_training_dataset():
         # 2. 创建目录
         originaldata_dir = os.path.join(app.config['ORIGINAL_DATA_FOLDER'], 'train_data', dataset_name)
         os.makedirs(originaldata_dir, exist_ok=True)
+        csv_dir = os.path.join(app.config['OUTPUT_FOLDER'], dataset_name)
+        os.makedirs(csv_dir, exist_ok=True)
         dataset_dir = os.path.join(app.config['DATASET_FOLDER'], 'train_data', dataset_name)
         os.makedirs(dataset_dir, exist_ok=True)
 
@@ -912,17 +908,10 @@ def upload_training_dataset():
             if filename.lower().endswith(('.pcap', '.pcapng')):
                 pcap_files.append(file_path)
 
-        # 4. 分步处理所有PCAP文件
-        for pcap_file in pcap_files:
-            # 第一步：提取流信息
-            result = process_pcap_file_step1(pcap_file, dataset_dir)
-            if result.get('status') == 'error':
-                return jsonify(result)
-
-            # 第二步：合并标签信息
-            result = process_pcap_file_step2(pcap_file, dataset_dir)
-            if result.get('status') == 'error':
-                return jsonify(result)
+        # 4. 处理所有PCAP文件
+        result = process_pcap_file(originaldata_dir, csv_dir, dataset_dir)
+        if result.get('status') == 'error':
+            return jsonify(result)
 
         return jsonify({
             'status': 'success',
@@ -938,284 +927,6 @@ def upload_training_dataset():
             'message': f'上传失败: {str(e)}'
         })
 
-# 待删除
-def process_pcap_file_step1(file_path, output_dir):
-    """第一步：从PCAP文件中提取流信息并保存为临时文件"""
-    try:
-        app.logger.info(f"开始处理PCAP文件: {file_path}")
-
-        # 初始化处理状态
-        processing_status['is_processing'] = True
-        processing_status['current_file'] = os.path.basename(file_path)
-        processing_status['total_files'] = 1
-        processing_status['processed_files'] = 0
-
-        # 1. 读取PCAP文件
-        app.logger.info("正在读取PCAP文件...")
-        packets = rdpcap(file_path)
-        if len(packets) == 0:
-            processing_status['is_processing'] = False
-            return {'status': 'error', 'message': 'PCAP文件为空'}
-
-        app.logger.info(f"PCAP文件包含 {len(packets)} 个数据包")
-
-        # 2. 准备多进程处理
-        num_processes = min(mp.cpu_count(), 4)  # 限制最大进程数
-        chunk_size = len(packets) // num_processes + 1
-        chunks = [packets[i:i+chunk_size] for i in range(0, len(packets), chunk_size)]
-
-        app.logger.info(f"使用 {num_processes} 个进程处理数据")
-
-        # 3. 创建进程池
-        with mp.Pool(processes=num_processes) as pool:
-            # 使用partial固定output_dir参数
-            process_func = partial(process_pcap_chunk, output_dir=output_dir)
-            # 并行处理数据块
-            results = pool.map(process_func, chunks)
-
-        # 4. 合并结果
-        flows = {}
-        for result in results:
-            for flow_key, flow_data in result.items():
-                if flow_key not in flows:
-                    flows[flow_key] = []
-                flows[flow_key].extend(flow_data)
-
-        app.logger.info(f"提取到 {len(flows)} 个流")
-
-        # 5. 保存流ID和对应的数据
-        flow_ids = []
-        flow_data_list = []
-
-        for flow_key, flow_data in flows.items():
-            # 获取第一个数据包的flow_id
-            flow_id = flow_data[0][2]  # flow_id存储在第三个位置
-            flow_ids.append(flow_id)
-
-            # 按时间戳排序
-            flow_data.sort(key=lambda x: x[1])
-
-            # 提取特征
-            packet_lengths = [float(pkt[0]) for pkt in flow_data]  # 包长在第一个位置
-            time_deltas = [0] + [float(flow_data[i][1] - flow_data[i-1][1])
-                               for i in range(1, len(flow_data))]
-
-            flow_data_list.append({
-                "packet_length": packet_lengths,
-                "arrive_time_delta": time_deltas
-            })
-
-        # 6. 创建临时文件目录
-        temp_dir = os.path.join(app.config['ORIGINAL_DATA_FOLDER'], 'temp_data')
-        os.makedirs(temp_dir, exist_ok=True)
-        app.logger.info(f"临时文件目录: {temp_dir}")
-
-        # 7. 保存流ID到CSV
-        flow_id_file = os.path.join(temp_dir, "flow_ids.csv")
-        app.logger.info(f"保存流ID到: {flow_id_file}")
-        with open(flow_id_file, 'w', encoding='utf-8') as f:
-            f.write("Flow ID\n")
-            for flow_id in flow_ids:
-                f.write(f"{flow_id}\n")
-
-        # 8. 保存流数据到JSON
-        flow_data_file = os.path.join(temp_dir, "flow_data.json")
-        app.logger.info(f"保存流数据到: {flow_data_file}")
-        with open(flow_data_file, 'w', encoding='utf-8') as f:
-            json.dump(flow_data_list, f, ensure_ascii=False, indent=2)
-
-        # 验证文件是否成功创建
-        if not os.path.exists(flow_id_file) or not os.path.exists(flow_data_file):
-            app.logger.error("临时文件创建失败")
-            return {'status': 'error', 'message': '临时文件创建失败'}
-
-        app.logger.info("PCAP处理第一步完成")
-        processing_status['is_processing'] = False
-        return {'status': 'success', 'message': 'PCAP处理第一步完成'}
-
-    except Exception as e:
-        processing_status['is_processing'] = False
-        app.logger.error(f"处理PCAP文件时出错: {str(e)}", exc_info=True)
-        return {'status': 'error', 'message': str(e)}
-
-# 待删除
-def process_pcap_file_step2(file_path, output_dir):
-    """第二步：从CSV文件中获取标签并合并数据"""
-    try:
-        app.logger.info(f"开始处理第二步: {file_path}")
-
-        # 1. 读取第一步生成的文件
-        temp_dir = os.path.join(app.config['ORIGINAL_DATA_FOLDER'], 'temp_data')
-        flow_id_file = os.path.join(temp_dir, "flow_ids.csv")
-        flow_data_file = os.path.join(temp_dir, "flow_data.json")
-
-        app.logger.info(f"检查临时文件: {flow_id_file}, {flow_data_file}")
-
-        if not os.path.exists(flow_id_file) or not os.path.exists(flow_data_file):
-            app.logger.error("未找到临时文件")
-            return {'status': 'error', 'message': '未找到第一步生成的文件'}
-
-        # 2. 读取流ID和流数据
-        app.logger.info("读取流ID和流数据...")
-        flow_ids = []
-        with open(flow_id_file, 'r', encoding='utf-8') as f:
-            next(f)  # 跳过标题行
-            for line in f:
-                flow_ids.append(line.strip())
-
-        with open(flow_data_file, 'r', encoding='utf-8') as f:
-            flow_data_list = json.load(f)
-
-        app.logger.info(f"读取到 {len(flow_ids)} 个流ID和 {len(flow_data_list)} 个流数据")
-        app.logger.info(f"流ID列表: {flow_ids}")
-
-        # 3. 读取CSV文件获取标签
-        csv_file = file_path.replace('.pcap', '.pcap_ISCX.csv')
-        app.logger.info(f"读取CSV文件: {csv_file}")
-
-        if not os.path.exists(csv_file):
-            app.logger.error("未找到CSV文件")
-            return {'status': 'error', 'message': '未找到对应的CSV文件'}
-
-        df = pd.read_csv(csv_file, sep=',', encoding='utf-8-sig')
-        df.columns = df.columns.str.strip()
-
-        app.logger.info(f"CSV文件列名: {df.columns.tolist()}")
-        app.logger.info(f"CSV文件中的Flow ID示例: {df['Flow ID'].head().tolist() if 'Flow ID' in df.columns else 'Flow ID列不存在'}")
-
-        if 'Flow ID' not in df.columns or 'Label' not in df.columns:
-            app.logger.error("CSV文件缺少必要列")
-            return {'status': 'error', 'message': 'CSV文件缺少Flow ID或Label列'}
-
-        # 4. 创建标签到流的映射
-        app.logger.info("创建标签到流的映射...")
-        label_to_flows = {}
-        matched_count = 0
-        unmatched_count = 0
-
-        for flow_id, flow_data in zip(flow_ids, flow_data_list):
-            matching_rows = df[df['Flow ID'] == flow_id]
-            if not matching_rows.empty:
-                label = matching_rows.iloc[0]['Label']
-                safe_label = label.replace('/', '_').replace('\\', '_')
-
-                if safe_label not in label_to_flows:
-                    label_to_flows[safe_label] = []
-                label_to_flows[safe_label].append(flow_data)
-                matched_count += 1
-            else:
-                unmatched_count += 1
-                app.logger.warning(f"未找到匹配的流ID: {flow_id}")
-
-        app.logger.info(f"匹配统计: 成功匹配 {matched_count} 个, 未匹配 {unmatched_count} 个")
-        app.logger.info(f"找到 {len(label_to_flows)} 个标签: {list(label_to_flows.keys())}")
-
-        # 5. 按标签保存结果
-        for label, flows in label_to_flows.items():
-            # 确保输出目录存在
-            os.makedirs(output_dir, exist_ok=True)
-
-            # 构建输出文件路径
-            output_file = os.path.join(output_dir, f"{label}.json")
-            app.logger.info(f"保存标签 {label} 的数据到: {output_file}")
-
-            # 检查文件是否已存在
-            if os.path.exists(output_file):
-                # 如果文件已存在，读取现有数据并追加
-                with open(output_file, 'r', encoding='utf-8') as f:
-                    existing_data = json.load(f)
-                existing_data.extend(flows)
-                flows = existing_data
-
-            # 保存数据
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(flows, f, ensure_ascii=False, indent=2)
-            app.logger.info(f"已保存{len(flows)}条流到{output_file}")
-
-        app.logger.info("PCAP处理第二步完成")
-        return {'status': 'success', 'message': 'PCAP处理第二步完成'}
-
-    except Exception as e:
-        app.logger.error(f"处理CSV文件时出错: {str(e)}", exc_info=True)
-        return {'status': 'error', 'message': str(e)}
-
-def monitor_traffic(session_id, capture_duration):
-    global is_monitoring
-    session_data = monitoring_data['sessions'][session_id]
-    dataset_count = 1
-
-    while is_monitoring:
-        try:
-            # 创建数据集目录
-            dataset_name = f"dataset_{dataset_count}"
-            original_data_dir = os.path.join(app.config['ORIGINAL_DATA_FOLDER'], session_id)
-            processed_data_dir = os.path.join(app.config['DATASET_FOLDER'], session_id)
-            os.makedirs(original_data_dir, exist_ok=True)
-            os.makedirs(processed_data_dir, exist_ok=True)
-
-            # 捕获流量
-            packets = []
-            start_time = time.time()
-
-            def packet_callback(packet):
-                if not is_monitoring:
-                    return False
-                packets.append(packet)
-
-            # 为每个网卡创建监听线程
-            sniff_threads = []
-            for interface in session_data['interfaces']:
-                thread = threading.Thread(
-                    target=sniff,
-                    args=(interface,),
-                    kwargs={'prn': packet_callback, 'store': 0},
-                    daemon=True
-                )
-                thread.start()
-                sniff_threads.append(thread)
-
-            # 等待指定时间或直到停止信号
-            while is_monitoring:
-                if capture_duration > 0 and time.time() - start_time >= capture_duration:
-                    break
-                time.sleep(1)
-
-            # 停止所有抓包线程
-            is_monitoring = False
-            time.sleep(1)  # 等待抓包线程结束
-            is_monitoring = True
-
-            # 保存原始数据
-            pcap_file = os.path.join(original_data_dir, f"{dataset_name}.pcap")
-            wrpcap(pcap_file, packets)
-
-            # 处理数据
-            data_processor = DataProcessor()
-            flows = data_processor.process_pcap(pcap_file)
-
-            # 保存处理后的数据
-            json_file = os.path.join(processed_data_dir, f"{dataset_name}.json")
-            with open(json_file, 'w', encoding='utf-8') as f:
-                json.dump(flows, f, ensure_ascii=False, indent=2)
-
-            # 更新会话信息
-            session_data['datasets'].append({
-                'name': dataset_name,
-                'original_file': pcap_file,
-                'processed_file': json_file,
-                'timestamp': datetime.now().isoformat(),
-                'duration': time.time() - start_time,
-                'packet_count': len(packets)
-            })
-
-            # 分析数据
-            analyze_packets(packets, session_id, dataset_name)
-
-            dataset_count += 1
-
-        except Exception as e:
-            app.logger.error(f"监控错误: {str(e)}")
-            time.sleep(5)  # 发生错误时等待一段时间后重试
 
 def analyze_packets(packets, session_id, dataset_name):
     try:
@@ -1260,6 +971,211 @@ def analyze_packets(packets, session_id, dataset_name):
 
     except Exception as e:
         app.logger.error(f"分析错误: {str(e)}")
+
+def load_model(model_name):
+    """加载指定的模型"""
+    global model_service
+    try:
+        if model_name == 'fsnet':
+            # 初始化FSNet模型
+            model_service = FSNetModel('train_data_test5', randseed=128, splitrate=0.6, max_len=200)
+            # 确保模型目录存在
+            model_dir = os.path.join('data', 'fsnet_train_data_test5_model', 'log')
+            if not os.path.exists(model_dir):
+                app.logger.error(f"模型目录不存在: {model_dir}")
+                return False
+            # 检查是否有训练好的模型
+            ckpt = tf.train.get_checkpoint_state(model_dir)
+            if not ckpt or not ckpt.model_checkpoint_path:
+                app.logger.error("未找到训练好的模型")
+                return False
+            return True
+        else:
+            app.logger.error(f"不支持的模型类型: {model_name}")
+            return False
+    except Exception as e:
+        app.logger.error(f"加载模型失败: {str(e)}")
+        return False
+
+
+def process_packet(packet):
+    """处理单个数据包"""
+    if not IP in packet:
+        return
+
+    # 获取流标识
+    src_ip = packet[IP].src
+    dst_ip = packet[IP].dst
+    if TCP in packet:
+        src_port = packet[TCP].sport
+        dst_port = packet[TCP].dport
+        protocol = 'TCP'
+    elif UDP in packet:
+        src_port = packet[UDP].sport
+        dst_port = packet[UDP].dport
+        protocol = 'UDP'
+    else:
+        return
+
+    # 创建流标识符
+    flow_id = f"{src_ip}:{src_port}-{dst_ip}:{dst_port}-{protocol}"
+
+    # 获取包长
+    packet_length = len(packet)
+    # 确定包方向
+    if src_ip < dst_ip:
+        packet_length = packet_length
+    else:
+        packet_length = -packet_length
+
+    # 更新流缓冲区
+    current_time = time.time()
+    if flow_id not in flow_buffer:
+        flow_buffer[flow_id] = {
+            'packets': [],
+            'start_time': current_time,
+            'last_update': current_time
+        }
+
+    flow_buffer[flow_id]['packets'].append(packet_length)
+    flow_buffer[flow_id]['last_update'] = current_time
+
+    # 检查流是否满足预测条件
+    if len(flow_buffer[flow_id]['packets']) >= min_packets:
+        try:
+            # 确保flow_data是一个列表
+            flow_data = [flow_buffer[flow_id]['packets']]
+            if not isinstance(flow_data, list):
+                flow_data = [flow_data]
+
+            # 进行预测
+            prediction = model_service.logit_online(flow_data)
+            pred_label = int(np.argmax(prediction))
+            confidence = float(np.max(prediction[0]))  # 取最大概率作为置信度
+            # 将预测结果放入队列
+            prediction_queue.put({
+                'flow_id': flow_id,
+                'prediction': pred_label,
+                'confidence': confidence,
+                'timestamp': current_time,
+                'packet_count': len(flow_buffer[flow_id]['packets']),
+                'src_ip': src_ip,
+                'dst_ip': dst_ip,
+                'src_port': src_port,
+                'dst_port': dst_port,
+                'protocol': protocol
+            })
+            # 清空该流
+            del flow_buffer[flow_id]
+        except Exception as e:
+            app.logger.error(f"预测失败: {str(e)}")
+            # 如果预测失败，也清空该流
+            del flow_buffer[flow_id]
+
+    # 清理超时的流
+    for fid in list(flow_buffer.keys()):
+        if current_time - flow_buffer[fid]['last_update'] > flow_timeout:
+            del flow_buffer[fid]
+
+def start_packet_capture(interface):
+    """开始捕获数据包"""
+    def packet_handler(packet):
+        if stop_capture:
+            return
+        process_packet(packet)
+
+    sniff(iface=interface, prn=packet_handler, store=0)
+
+@app.route('/realtime_monitor', methods=['GET', 'POST'])
+def realtime_monitor():
+    global is_monitoring, min_packets, capture_thread, stop_capture, model_service
+
+    if request.method == 'POST':
+        data = request.get_json()
+        action = data.get('action')
+
+        if action == 'start':
+            interfaces = data.get('interfaces')
+            model_name = data.get('model')
+            min_packets = data.get('min_packets', 10)
+
+            if not model_name or not interfaces:
+                return jsonify({'status': 'error', 'message': '缺少模型或接口参数'})
+
+            # 加载模型
+            if not load_model(model_name):
+                return jsonify({'status': 'error', 'message': '模型加载失败'})
+
+            is_monitoring = True
+            stop_capture = False
+            capture_thread = threading.Thread(target=start_packet_capture, args=(interfaces[0],), daemon=True)
+            capture_thread.start()
+
+            return jsonify({'status': 'success', 'message': '监测已启动'})
+
+        elif action == 'stop':
+            is_monitoring = False
+            stop_capture = True
+            if capture_thread and capture_thread.is_alive():
+                capture_thread.join(timeout=1.0)
+
+            # ✅ 卸载模型
+            if model_service:
+                try:
+                    if hasattr(model_service, 'close'):
+                        model_service.close()  # 如果你定义了 close 方法
+                except Exception as e:
+                    app.logger.warning(f"模型关闭异常: {str(e)}")
+                model_service = None
+
+            # ✅ 清理 TensorFlow flags 防止冲突
+            try:
+                from tensorflow.python.platform import flags
+                flags.FLAGS.__dict__['__flags'].clear()
+                flags.FLAGS.__dict__['__parsed'] = False
+            except Exception as e:
+                app.logger.warning(f"清理 flags 失败: {str(e)}")
+
+            return jsonify({'status': 'success', 'message': '监测已停止并清理模型'})
+
+        return jsonify({'status': 'error', 'message': '未知操作'})
+
+    # GET 请求返回状态页面
+    system_status = {
+        'cpu_usage': psutil.cpu_percent(interval=1),
+        'memory_usage': psutil.virtual_memory().percent,
+        'disk_usage': psutil.disk_usage('/').percent,
+        'network_interfaces': psutil.net_if_stats(),
+        'running_processes': len(psutil.pids())
+    }
+
+    return render_template('realtime_monitor.html', system_status=system_status)
+
+
+
+@app.route('/get_predictions')
+def get_predictions():
+    """获取预测结果"""
+    predictions = []
+    while not prediction_queue.empty():
+        predictions.append(prediction_queue.get())
+
+    return jsonify({
+        'status': 'success',
+        'predictions': predictions
+    })
+
+@app.route('/model_status')
+def model_status():
+    return jsonify({
+        'loaded': model_service is not None
+    })
+
+@app.route('/capture_status')
+def capture_status():
+    return jsonify({
+        'capturing': is_monitoring
+    })
 
 if __name__ == '__main__':
     # 确保上传目录存在

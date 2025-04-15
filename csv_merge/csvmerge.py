@@ -86,12 +86,15 @@ def merge_csv_files(file_paths, output_file, how='concat', on=None):
 if __name__ == "__main__":
     # 示例用法
     csv_files = [
-        "csv_merge/Friday-WorkingHours-Morning.pcap_ISCX.csv",
-        "csv_merge/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv",
-        "csv_merge/Friday-WorkingHours-Afternoon-PortScan.pcap_ISCX.csv"
+        # "csv_merge/Friday-WorkingHours-Morning.pcap_ISCX.csv",
+        # "csv_merge/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv",
+        # "csv_merge/Friday-WorkingHours-Afternoon-PortScan.pcap_ISCX.csv",
+        "csv_merge/Thursday-WorkingHours-Afternoon-Infilteration.pcap_ISCX.csv",
+        "csv_merge/Thursday-WorkingHours-Morning-WebAttacks.pcap_ISCX.csv"
     ]
 
-    output_path = "output/Friday-WorkingHours.csv"
+    # output_path = "output/Friday-WorkingHours.csv"
+    output_path = "output/Thursday-WorkingHours.csv"
 
     # 简单纵向拼接（默认）
     merge_csv_files(csv_files, output_path)

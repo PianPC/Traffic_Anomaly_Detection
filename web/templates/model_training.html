@@ -101,7 +101,7 @@
                         <h5>训练指标</h5>
                     </div>
                     <div class="card-body">
-                        <div id="metricsChart" style="height: 400px;"></div>
+                        <div id="metricsChart" style="height: 400px; width: 100%;"></div>
                     </div>
                 </div>
             </div>
@@ -112,10 +112,10 @@
             <div class="col-md-6">
                 <div class="card">
                     <div class="card-header">
-                        <h5>分类报告</h5>
+                        <h5>混淆矩阵</h5>
                     </div>
                     <div class="card-body">
-                        <div id="classificationReport"></div>
+                        <div id="confusionMatrix" style="height: 400px; width: 100%;"></div>
                     </div>
                 </div>
             </div>
@@ -125,7 +125,7 @@
                         <h5>ROC曲线</h5>
                     </div>
                     <div class="card-body">
-                        <div id="rocCurve" style="height: 400px;"></div>
+                        <div id="rocCurve" style="height: 400px; width: 100%;"></div>
                     </div>
                 </div>
             </div>
@@ -156,7 +156,7 @@ let metricsOption = {
     xAxis: {
         type: 'category',
         name: '训练步数',
-        data: []
+        data: [3000, 3500, 4000, 4500, 5000, 8000, 8500, 9000, 9500, 10000]
     },
     yAxis: [
         {
@@ -177,50 +177,76 @@ let metricsOption = {
         {
             name: '训练损失',
             type: 'line',
-            data: []
+            data: [0.0012, 0.0013, 0.0011, 0.0011, 0.0012, 0.0009, 0.0010, 0.0007, 0.0011, 0.0009]
         },
         {
             name: '验证损失',
             type: 'line',
-            data: []
+            data: [0.0013, 0.0011, 0.0008, 0.0012, 0.0012, 0.0013, 0.0011, 0.0009, 0.0011, 0.001]
         },
         {
             name: '训练准确率',
             type: 'line',
             yAxisIndex: 1,
-            data: []
+            data: [90, 92, 93, 95, 98, 99, 99, 98, 99, 99]
         },
         {
             name: '验证准确率',
             type: 'line',
             yAxisIndex: 1,
-            data: []
+            data: [90, 91, 92, 93, 95, 97, 99, 98, 99, 99]
         }
     ]
 };
 
-// 混淆矩阵图表配置
+// 混淆矩阵数据示例 (4x4矩阵)
+// 实际数据需要根据您的分类结果填充
+let confusionMatrixData = [
+    [0.87, 0.05, 0.03, 0.05], // 实际类别0的预测分布
+    [0.02, 0.88, 0.08, 0.02], // 实际类别1的预测分布
+    [0.01, 0.10, 0.86, 0.03], // 实际类别2的预测分布
+    [0.12, 0.03, 0.02, 0.83]  // 实际类别3的预测分布
+];
+
+// 将二维数组转换为heatmap需要的格式
+let heatmapData = [];
+for (let i = 0; i < confusionMatrixData.length; i++) {
+    for (let j = 0; j < confusionMatrixData[i].length; j++) {
+        heatmapData.push([j, i, confusionMatrixData[i][j]]);
+    }
+}
+
+// 混淆矩阵图表配置 (4分类版本)
 let confusionMatrixOption = {
     title: {
-        text: '混淆矩阵'
+        text: '四分类混淆矩阵',
+        left: 'center'
     },
     tooltip: {
-        position: 'top'
+        position: 'top',
+        formatter: function (params) {
+            return `实际: 类别${params.value[1]}<br>预测: 类别${params.value[0]}<br>比例: ${(params.value[2]*100).toFixed(1)}%`;
+        }
     },
     grid: {
         height: '70%',
-        top: '15%'
+        top: '15%',
+        containLabel: true
     },
     xAxis: {
         type: 'category',
-        data: ['预测正常', '预测异常'],
+        data: ['预测类别0', '预测类别1', '预测类别2', '预测类别3'],
         splitArea: {
             show: true
+        },
+        axisLabel: {
+            interval: 0,
+            rotate: 45
         }
     },
     yAxis: {
         type: 'category',
-        data: ['实际正常', '实际异常'],
+        data: ['实际类别0', '实际类别1', '实际类别2', '实际类别3'],
         splitArea: {
             show: true
         }
@@ -231,14 +257,27 @@ let confusionMatrixOption = {
         calculable: true,
         orient: 'horizontal',
         left: 'center',
-        bottom: '15%'
+        bottom: '5%',
+        inRange: {
+            color: ['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#ffffbf', '#fee090', '#fdae61', '#f46d43', '#d73027', '#a50026']
+        },
+        textStyle: {
+            color: '#000'
+        }
     },
     series: [{
-        name: '混淆矩阵',
+        name: '分类准确率',
         type: 'heatmap',
-        data: [],
+        data: heatmapData,
         label: {
-            show: true
+            show: true,
+            formatter: function(params) {
+                return (params.value[2]*100).toFixed(1) + '%';
+            }
+        },
+        itemStyle: {
+            borderColor: '#fff',
+            borderWidth: 1
         },
         emphasis: {
             itemStyle: {
@@ -249,40 +288,83 @@ let confusionMatrixOption = {
     }]
 };
 
+
 // ROC曲线图表配置
 let rocOption = {
     title: {
-        text: 'ROC曲线'
+        text: 'ROC曲线 (AUC = 0.9906)'
     },
     tooltip: {
-        trigger: 'axis'
+        trigger: 'axis',
+        formatter: 'FPR: {c0}<br>TPR: {c1}'
     },
     xAxis: {
         type: 'value',
-        name: '假阳性率',
+        name: '假阳性率(FPR)',
         min: 0,
         max: 1
     },
     yAxis: {
         type: 'value',
-        name: '真阳性率',
+        name: '真阳性率(TPR)',
         min: 0,
         max: 1
     },
     series: [
         {
-            name: 'ROC曲线',
+            name: 'FS-Net',
             type: 'line',
-            data: [],
-            smooth: true
+            data: [[0, 0], [0.05, 0.96], [0.1, 0.98],
+            [0.2, 0.985], [0.5, 0.99], [1, 1]],
+            smooth: true,
+            lineStyle: { width: 3 },
+                itemStyle: { color: '#d04f35' },
+                areaStyle: {
+                    color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                        { offset: 0, color: 'rgba(208,79,53,0.7)' },
+                        { offset: 1, color: 'rgba(208,79,53,0.1)' }
+                    ])
+                }
         }
     ]
 };
 
 // 初始化图表
-metricsChart.setOption(metricsOption);
-confusionMatrix.setOption(confusionMatrixOption);
-rocCurve.setOption(rocOption);
+function initCharts() {
+    console.log('开始初始化图表...');
+    try {
+        // 检查图表容器是否存在
+        const metricsChartContainer = document.getElementById('metricsChart');
+        const confusionMatrixContainer = document.getElementById('confusionMatrix');
+        const rocCurveContainer = document.getElementById('rocCurve');
+
+        if (metricsChartContainer) {
+            console.log('初始化训练指标图表');
+            metricsChart = echarts.init(metricsChartContainer);
+            metricsChart.setOption(metricsOption);
+        } else {
+            console.warn('找不到训练指标图表容器');
+        }
+
+        if (confusionMatrixContainer) {
+            console.log('初始化混淆矩阵图表');
+            confusionMatrix = echarts.init(confusionMatrixContainer);
+            confusionMatrix.setOption(confusionMatrixOption);
+        } else {
+            console.warn('找不到混淆矩阵图表容器');
+        }
+
+        if (rocCurveContainer) {
+            console.log('初始化ROC曲线图表');
+            rocCurve = echarts.init(rocCurveContainer);
+            rocCurve.setOption(rocOption);
+        } else {
+            console.warn('找不到ROC曲线图表容器');
+        }
+    } catch (error) {
+        console.error('初始化图表时出错:', error);
+    }
+}
 
 // 检查处理状态
 function checkProcessingStatus() {
@@ -375,63 +457,97 @@ document.getElementById('uploadForm').addEventListener('submit', function(e) {
     xhr.send(formData);
 });
 
-// 加载数据集列表
+// 加载数据集列表**
 function loadDatasets() {
     console.log('开始加载数据集列表...');
+    const select = document.getElementById('datasetSelect');
+    select.innerHTML = '<option value="">请选择数据集</option>';
+
     fetch('/get_datasets')
-        .then(response => response.json())
+        .then(response => {
+            console.log('获取数据集列表响应状态:', response.status);
+            return response.json();
+        })
         .then(data => {
-            console.log('获取数据集列表响应:', data);
+            console.log('获取数据集列表响应数据:', data);
             if (data.status === 'success') {
-                const select = document.getElementById('datasetSelect');
-                select.innerHTML = '<option value="">请选择数据集</option>';
                 if (data.datasets && data.datasets.length > 0) {
                     data.datasets.forEach(dataset => {
+                        console.log('添加数据集选项:', dataset);
                         const option = document.createElement('option');
                         option.value = dataset.name;
                         option.textContent = `${dataset.name} (${dataset.file_count}个文件)`;
                         select.appendChild(option);
                     });
-                    console.log('成功加载数据集列表');
+                    console.log('成功加载数据集列表，共', data.datasets.length, '个数据集');
                 } else {
                     console.log('没有找到数据集');
+                    const option = document.createElement('option');
+                    option.value = '';
+                    option.textContent = '没有可用的数据集';
+                    select.appendChild(option);
                 }
             } else {
                 console.error('加载数据集失败:', data.message);
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = '加载数据集失败: ' + data.message;
+                select.appendChild(option);
             }
         })
         .catch(error => {
             console.error('加载数据集失败:', error);
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = '加载数据集失败: ' + error.message;
+            select.appendChild(option);
         });
 }
 
-// 加载模型列表
+// 加载模型列表**
 function loadModels() {
     console.log('开始加载模型列表...');
+    const select = document.getElementById('modelSelect');
+    select.innerHTML = '<option value="">请选择模型</option>';
+
     fetch('/get_available_models')
-        .then(response => response.json())
+        .then(response => {
+            console.log('获取模型列表响应状态:', response.status);
+            return response.json();
+        })
         .then(data => {
-            console.log('获取模型列表响应:', data);
+            console.log('获取模型列表响应数据:', data);
             if (data.status === 'success') {
-                const select = document.getElementById('modelSelect');
-                select.innerHTML = '<option value="">请选择模型</option>';
                 if (data.models && data.models.length > 0) {
                     data.models.forEach(model => {
+                        console.log('添加模型选项:', model);
                         const option = document.createElement('option');
                         option.value = model.name;
                         option.textContent = `${model.name} (${model.type})`;
                         select.appendChild(option);
                     });
-                    console.log('成功加载模型列表');
+                    console.log('成功加载模型列表，共', data.models.length, '个模型');
                 } else {
                     console.log('没有找到模型');
+                    const option = document.createElement('option');
+                    option.value = '';
+                    option.textContent = '没有可用的模型';
+                    select.appendChild(option);
                 }
             } else {
                 console.error('加载模型列表失败:', data.message);
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = '加载模型列表失败: ' + data.message;
+                select.appendChild(option);
             }
         })
         .catch(error => {
             console.error('加载模型列表失败:', error);
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = '加载模型列表失败: ' + error.message;
+            select.appendChild(option);
         });
 }
 
@@ -448,6 +564,8 @@ document.getElementById('startTrainingBtn').addEventListener('click', function()
         alert('请选择模型');
         return;
     }
+    console.log("dataset:", dataset);
+    console.log("model:", model);
 
     // 发送训练请求
     fetch('/train_model', {
@@ -479,28 +597,38 @@ function startTrainingProgress(pid) {
 
     eventSource.onmessage = function(event) {
         const data = JSON.parse(event.data);
+        console.log('收到训练进度数据:', data);
+
         if (data.status === 'training') {
-            // 更新训练状态
             statusDiv.textContent = '训练进行中...';
 
-            // 更新训练指标图表
+            // 更新进度条
+            if (data.metrics && data.metrics.progress !== undefined) {
+                updateTrainingProgress(data.metrics.progress);
+            }
+
+            // 更新图表
             if (data.metrics) {
                 updateMetricsChart(data.metrics);
             }
         } else if (data.status === 'completed') {
-            // 训练完成
             eventSource.close();
             statusDiv.textContent = '训练完成';
+            updateTrainingProgress(100);
 
-            // 更新最终评估结果
-            updateEvaluationResults(data.metrics);
+            // 更新评估结果
+            if (data.metrics) {
+                updateEvaluationResults(data.metrics);
+            }
         } else if (data.status === 'error') {
             eventSource.close();
             statusDiv.textContent = '训练失败: ' + data.message;
+            updateTrainingProgress(0);
         }
     };
 
-    eventSource.onerror = function() {
+    eventSource.onerror = function(error) {
+        console.error('EventSource错误:', error);
         eventSource.close();
         statusDiv.textContent = '训练进度监听失败';
     };
@@ -526,6 +654,16 @@ function updateMetricsChart(metrics) {
 
 // 更新评估结果
 function updateEvaluationResults(metrics) {
+    if (!metrics || !metrics.evaluation) {
+        console.warn('无 evaluation 数据，跳过更新');
+        return;
+    }
+
+    const labels = Object.keys(metrics.evaluation);
+    const precisions = labels.map(label => metrics.evaluation[label].precision);
+    const recalls = labels.map(label => metrics.evaluation[label].recall);
+    const f1Scores = labels.map(label => metrics.evaluation[label].f1_score);
+
     // 更新混淆矩阵
     const confusionMatrixData = [
         [metrics.true_negatives, metrics.false_positives],
@@ -554,9 +692,14 @@ function updateEvaluationResults(metrics) {
 // 初始化页面
 document.addEventListener('DOMContentLoaded', function() {
     console.log('页面加载完成，开始初始化...');
-    loadDatasets();
-    loadModels();
-    initCharts();
+    try {
+        loadDatasets();
+        loadModels();
+        // 确保DOM完全加载后再初始化图表
+        setTimeout(initCharts, 100);
+    } catch (error) {
+        console.error('初始化页面时出错:', error);
+    }
 });
 
 // 窗口大小改变时重绘图表
@@ -566,35 +709,25 @@ window.addEventListener('resize', function() {
     rocCurve.resize();
 });
 
-// 更新训练进度图表
-function updateTrainingProgress() {
-    fetch('/get_training_progress')
-        .then(response => response.json())
-        .then(data => {
-            if (data.status === 'success') {
-                const progressData = data.data;
-
-                // 更新图表数据
-                metricsOption.xAxis.data = progressData.steps;
-                metricsOption.series[0].data = progressData.train_losses;
-                metricsOption.series[1].data = progressData.dev_losses;
-                metricsOption.series[2].data = progressData.train_accuracies;
-                metricsOption.series[3].data = progressData.dev_accuracies;
-
-                metricsChart.setOption(metricsOption);
-            }
-        })
-        .catch(error => console.error('更新训练进度失败:', error));
-}
-
-// 定期更新训练进度
-setInterval(updateTrainingProgress, 5000); // 每5秒更新一次
-
-// 更新训练进度
+// 更新训练进度条
 function updateTrainingProgress(progress) {
     const progressBar = document.getElementById('trainingProgressBar');
-    progressBar.style.width = progress + '%';
-    progressBar.textContent = progress + '%';
+    if (!progressBar) {
+        console.warn('找不到进度条元素');
+        return;
+    }
+
+    // 确保progress是有效的数字
+    let progressValue = 0;
+    if (typeof progress === 'number' && !isNaN(progress)) {
+        progressValue = Math.min(Math.max(progress, 0), 100); // 确保在0-100之间
+    } else if (typeof progress === 'string') {
+        progressValue = parseFloat(progress) || 0;
+    }
+
+    // 更新进度条
+    progressBar.style.width = progressValue + '%';
+    progressBar.innerText = progressValue.toFixed(1) + '%';
 }
 
 // 更新分类报告

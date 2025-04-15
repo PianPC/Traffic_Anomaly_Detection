@@ -37,9 +37,9 @@
                                             <div class="progress mb-3" style="height: 20px;">
                                                 <div class="progress-bar" id="uploadProgress" role="progressbar" style="width: 0%">0%</div>
                                             </div>
-                                            <div class="progress mb-3" style="height: 20px;">
+                                            <!-- <div class="progress mb-3" style="height: 20px;">
                                                 <div class="progress-bar progress-bar-striped progress-bar-animated" id="processProgress" role="progressbar" style="width: 0%">处理中 0%</div>
-                                            </div>
+                                            </div> -->
                                             <button type="submit" class="btn btn-primary" id="uploadBtn">上传文件</button>
                                         </form>
                                     </div>
@@ -173,32 +173,50 @@ let anomalyOption = {
 trafficChart.setOption(trafficOption);
 anomalyChart.setOption(anomalyOption);
 
-// 加载模型列表
+// 加载模型列表**
 function loadModels() {
-    fetch('/get_models')
-        .then(response => response.json())
+    console.log('开始加载模型列表...');
+    const select = document.getElementById('modelSelect');
+    select.innerHTML = '<option value="">请选择模型</option>';
+
+    fetch('/get_available_models')
+        .then(response => {
+            console.log('获取模型列表响应状态:', response.status);
+            return response.json();
+        })
         .then(data => {
-            const modelSelect = document.getElementById('modelSelect');
-            modelSelect.innerHTML = '';
-            if (data.models && data.models.length > 0) {
-                data.models.forEach(model => {
+            console.log('获取模型列表响应数据:', data);
+            if (data.status === 'success') {
+                if (data.models && data.models.length > 0) {
+                    data.models.forEach(model => {
+                        console.log('添加模型选项:', model);
+                        const option = document.createElement('option');
+                        option.value = model.name;
+                        option.textContent = `${model.name} (${model.type})`;
+                        select.appendChild(option);
+                    });
+                    console.log('成功加载模型列表，共', data.models.length, '个模型');
+                } else {
+                    console.log('没有找到模型');
                     const option = document.createElement('option');
-                    option.value = model.name;
-                    option.text = model.name;
-                    modelSelect.appendChild(option);
-                });
+                    option.value = '';
+                    option.textContent = '没有可用的模型';
+                    select.appendChild(option);
+                }
             } else {
+                console.error('加载模型列表失败:', data.message);
                 const option = document.createElement('option');
                 option.value = '';
-                option.text = '暂无可用的检测模型';
-                option.disabled = true;
-                modelSelect.appendChild(option);
+                option.textContent = '加载模型列表失败: ' + data.message;
+                select.appendChild(option);
             }
         })
         .catch(error => {
             console.error('加载模型列表失败:', error);
-            const modelSelect = document.getElementById('modelSelect');
-            modelSelect.innerHTML = '<option value="" disabled>加载模型列表失败</option>';
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = '加载模型列表失败: ' + error.message;
+            select.appendChild(option);
         });
 }
 

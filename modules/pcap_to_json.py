@@ -127,8 +127,8 @@ def process_dataset(dataset_dir, output_dir, min_packets=20, num_workers=None):
 
 if __name__ == "__main__":
     # 设置参数
-    dataset_directory = 'E:\\workplace\\Code\\VSCodeProject\\traffic_anomaly_detection\\originaldata\\test'  # 替换为您的数据集路径
-    output_directory = 'E:\\workplace\\Code\\VSCodeProject\\traffic_anomaly_detection\dataset\\train_data'         # 替换为您想要保存结果的路径
+    dataset_directory = 'originaldata\\train_data_history'  # 替换为您的数据集路径
+    output_directory = 'dataset\\train_data_history'         # 替换为您想要保存结果的路径
     min_flow_packets = 1                       # 设置最小数据包个数
     num_workers = 20  # 设置进程池中的最大工作进程数
 
