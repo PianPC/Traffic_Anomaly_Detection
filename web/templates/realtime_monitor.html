@@ -124,6 +124,8 @@
                                         <th>目标IP:端口</th>
                                         <th>协议</th>
                                         <th>包数量</th>
+                                        <th>流量</th>
+                                        <th>响应时间</th>  <!-- 新增列 -->
                                         <th>预测结果</th>
                                         <th>置信度</th>
                                     </tr>
@@ -141,18 +143,32 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
 <script>
 // 初始化图表
 let trafficChart = echarts.init(document.getElementById('trafficChart'));
 let anomalyChart = echarts.init(document.getElementById('anomalyChart'));
 
+// 全局存储累计流量分类数据
+let cumulativeLabelCounts = {
+    'BENIGN': 0,
+    'Bot': 0,
+    'DDoS': 0,
+    'PortScan': 0,
+    'UNKNOWN': 0
+};
+
 // 流量图表配置
 let trafficOption = {
     title: {
-        text: '实时流量'
+        text: '实时端口流量'
     },
     tooltip: {
-        trigger: 'axis'
+        trigger: 'axis',
+        formatter: function(params) {
+            return `时间: ${params[0].name}<br/>流量: ${params[0].value} bytes/s`;
+        }
     },
     xAxis: {
         type: 'category',
@@ -160,17 +176,38 @@ let trafficOption = {
     },
     yAxis: {
         type: 'value',
-        name: '数据包数量'
+        name: '流量(bytes/s)'
     },
     series: [{
         name: '流量',
         type: 'line',
         data: [],
         areaStyle: {}
-    }]
+    }],
+    dataZoom: [
+        // 内置型数据区域缩放
+        {
+            type: 'inside',  // 内置型，支持鼠标滚轮缩放
+            xAxisIndex: 0,
+            zoomOnMouseWheel: 'shift' // 按住shift用滚轮缩放
+        },
+        // 滑动条型数据区域缩放
+        {
+            type: 'slider',
+            xAxisIndex: 0,
+            filterMode: 'filter',
+            brushSelect: true // 允许刷选
+        }
+    ],
+        // 添加这个配置防止数据被压缩
+        animation: false,
+        // 提高渲染性能
+        large: true,
+        largeThreshold: 200
 };
 
 // 异常检测图表配置
+// 修改anomalyOption配置
 let anomalyOption = {
     title: {
         text: '流量类型分布'
@@ -182,12 +219,12 @@ let anomalyOption = {
     legend: {
         orient: 'vertical',
         left: 'right',
-        data: []
+        data: [] // 初始为空，数据会动态更新
     },
     series: [{
         type: 'pie',
         radius: '70%',
-        data: [],
+        data: [], // 初始为空
         emphasis: {
             itemStyle: {
                 shadowBlur: 10,
@@ -198,9 +235,16 @@ let anomalyOption = {
     }]
 };
 
+
+
+
 // 初始化图表
 trafficChart.setOption(trafficOption);
 anomalyChart.setOption(anomalyOption);
+
+// 添加全局变量来记录累计流量
+let totalNormalFlows = 0;
+let totalAnomalyFlows = 0;
 
 // 加载网络接口
 function loadInterfaces() {
@@ -310,71 +354,71 @@ function loadModels() {
         });
 }
 
-// 更新监测数据
-function updateMonitorData() {
-    fetch('/get_monitor_data')
-        .then(response => response.json())
-        .then(data => {
-            if (data.status === 'success') {
-                // 更新流量图表
-                if (data.data.traffic && data.data.traffic.length > 0) {
-                    trafficOption.xAxis.data.push(data.data.traffic[0].name);
-                    trafficOption.series[0].data.push(data.data.traffic[0].value);
-
-                    // 保持最近30个数据点
-                    if (trafficOption.xAxis.data.length > 30) {
-                        trafficOption.xAxis.data.shift();
-                        trafficOption.series[0].data.shift();
-                    }
-                    trafficChart.setOption(trafficOption);
-                }
-
-                // 更新异常检测图表
-                if (data.data.anomaly) {
-                    anomalyOption.series[0].data = data.data.anomaly;
-                    anomalyChart.setOption(anomalyOption);
-                }
-
-                // 如果检测到异常，显示提示
-                if (data.data.anomaly && data.data.anomaly.find(item => item.name === '异常' && item.value > 0)) {
-                    showAnomalyAlert(data.data.anomaly_details);
-                }
-            }
-        })
-        .catch(error => console.error('更新监测数据失败:', error));
-}
-
-// 修改更新预测结果的函数
+// 修改updatePredictions函数
 function updatePredictions() {
     fetch('/get_predictions')
         .then(response => response.json())
         .then(data => {
             if (data.status === 'success') {
+                console.log('本次数据:', data.label_counts);
+                // 累加本次数据到全局变量
+                Object.entries(data.label_counts).forEach(([label, count]) => {
+                    cumulativeLabelCounts[label] += count;
+                });
+                console.log('累计数据:', cumulativeLabelCounts);
+
+                // 使用累计数据更新饼图
+                updatePieChart(cumulativeLabelCounts);
+
                 const tbody = document.getElementById('anomalyTableBody');
+
+                // 处理每个预测结果
                 data.predictions.forEach(prediction => {
                     const row = document.createElement('tr');
-                    // 根据预测结果设置不同的样式
-                    if (prediction.prediction !== '0') {
-                        row.className = 'table-danger';
+
+                    // 根据分类设置行样式
+                    if (prediction.label_name === 'BENIGN') {
+                        row.className = 'table-success'; // 正常流量-绿色
+                    } else if (prediction.label_name === 'UNKNOWN') {
+                        row.className = 'table-primary'; // 未知流量-蓝色
+                    } else {
+                        // 异常流量根据类型设置不同颜色
+                        const anomalyColors = {
+                            'Bot': 'table-warning',    // 黄色
+                            'DDoS': 'table-danger',    // 红色
+                            'PortScan': 'table-orange' // 橙色
+                        };
+                        row.className = anomalyColors[prediction.label_name] || 'table-danger';
                     }
+
                     row.innerHTML = `
                         <td>${new Date(prediction.timestamp * 1000).toLocaleTimeString()}</td>
                         <td>${prediction.src_ip}:${prediction.src_port}</td>
                         <td>${prediction.dst_ip}:${prediction.dst_port}</td>
                         <td>${prediction.protocol}</td>
                         <td>${prediction.packet_count}</td>
-                        <td>${prediction.prediction}</td>
+                        <td>${(prediction.bytes_per_second / 1024).toFixed(2)} KB/s</td>
+                        <td>${(prediction.response_time * 1000).toFixed(2)} ms</td>
+                        <td>${prediction.label_name}</td>
                         <td>${(prediction.confidence * 100).toFixed(2)}%</td>
                     `;
+
                     tbody.insertBefore(row, tbody.firstChild);
 
-                    // 保持表格最多显示100行
-                    if (tbody.children.length > 100) {
-                        tbody.removeChild(tbody.lastChild);
-                    }
+                    // 更新流量图表
+                    const currentTime = new Date().toLocaleTimeString();    // 获取当前时间
+                    trafficOption.xAxis.data.push(currentTime); // 添加时间到X轴
+                    trafficOption.series[0].data.push(prediction.bytes_per_second || 0); // 使用每秒字节数
 
-                    // 显示警告提示
-                    if (prediction.prediction !== '0') {
+                    // 保持最近100个数据点
+                    if (trafficOption.xAxis.data.length > 100) {
+                        trafficOption.xAxis.data.shift();
+                        trafficOption.series[0].data.shift();
+                    }
+                    trafficChart.setOption(trafficOption);
+
+                    // 只对异常流量显示警告提示
+                    if (prediction.label_name !== 'BENIGN') {
                         showAnomalyAlert(prediction);
                     }
                 });
@@ -383,7 +427,36 @@ function updatePredictions() {
         .catch(error => console.error('获取预测结果失败:', error));
 }
 
-// 添加显示警告提示的函数
+
+// 更新饼图函数
+// updatePieChart({ BENIGN: 10, Bot: 5, DDoS: 2 });         手动更新饼图代码
+function updatePieChart(labelCounts) {
+    console.log('传入的labelCounts:', labelCounts); // 调试输出
+    console.log('转换为饼图的数据:', Object.entries(labelCounts).map(([name, value]) => ({ name, value })));
+
+    // 定义颜色映射
+    const colorMap = {
+        'BENIGN': '#91cc75',  // 绿色
+        'Bot': '#fac858',     // 黄色
+        'DDoS': '#ee6666',    // 红色
+        'PortScan': '#ff9966',// 橙色
+        'UNKNOWN': '#5470c6'  // 蓝色
+    };
+
+    // 准备饼图数据
+    const pieData = Object.entries(labelCounts).map(([name, value]) => ({
+        name,
+        value,
+        itemStyle: { color: colorMap[name] || '#5470c6' }
+    }));
+
+    // 更新饼图配置
+    anomalyOption.series[0].data = pieData;
+    anomalyChart.setOption(anomalyOption);
+}
+
+
+// 修改显示警告提示的函数
 function showAnomalyAlert(prediction) {
     // 创建 Toast 容器（如果不存在）
     let toastContainer = document.getElementById('toast-container');
@@ -437,6 +510,30 @@ function showAnomalyAlert(prediction) {
 
 // 开始监测
 document.getElementById('startBtn').addEventListener('click', function() {
+    // 重置累计流量计数
+    totalNormalFlows = 0;
+    totalAnomalyFlows = 0;
+
+    // 重置图表数据
+    trafficOption.xAxis.data = [];
+    trafficOption.series[0].data = [];
+    trafficChart.setOption(trafficOption);
+
+    // 重置累计数据
+    cumulativeLabelCounts = {
+        'BENIGN': 0,
+        'Bot': 0,
+        'DDoS': 0,
+        'PortScan': 0,
+        'UNKNOWN': 0
+    };
+
+    anomalyOption.series[0].data = [
+        { value: 0, name: '正常', itemStyle: { color: '#91cc75' } },
+        { value: 0, name: '异常', itemStyle: { color: '#5470c6' } }
+    ];
+    anomalyChart.setOption(anomalyOption);
+
     const interfaces = getSelectedInterfaces();
     const model = document.getElementById('modelSelect').value;
     const minPackets = document.getElementById('minPacketsInput').value;
@@ -467,11 +564,9 @@ document.getElementById('startBtn').addEventListener('click', function() {
         if (data.status === 'success') {
             this.disabled = true;
             document.getElementById('stopBtn').disabled = false;
-            // 开始定期更新数据
-            window.monitorInterval = setInterval(updateMonitorData, 1000);
 
             // 启动预测更新
-            window.predictionInterval = setInterval(updatePredictions, 1000);
+            window.predictionInterval = setInterval(updatePredictions, 3000);
         } else {
             alert(data.message);
         }
@@ -550,4 +645,22 @@ function updateCaptureStatus() {
 setInterval(updateModelStatus, 5000);
 setInterval(updateCaptureStatus, 1000);
 </script>
+
+<style>
+    /* 添加橙色表格样式 */
+.table-orange {
+    --bs-table-bg: #ff9966;
+    --bs-table-striped-bg: #ff8c5a;
+    --bs-table-striped-color: #000;
+    --bs-table-active-bg: #ff7f40;
+    --bs-table-active-color: #000;
+    --bs-table-hover-bg: #ff8c5a;
+    --bs-table-hover-color: #000;
+    color: #000;
+    border-color: #ff7f40;
+}
+</style>
+
+
 {% endblock %}
+

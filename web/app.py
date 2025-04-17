@@ -978,9 +978,9 @@ def load_model(model_name):
     try:
         if model_name == 'fsnet':
             # 初始化FSNet模型
-            model_service = FSNetModel('train_data_test5', randseed=128, splitrate=0.6, max_len=200)
+            model_service = FSNetModel('train_data_test4', randseed=128, splitrate=0.6, max_len=200)
             # 确保模型目录存在
-            model_dir = os.path.join('data', 'fsnet_train_data_test5_model', 'log')
+            model_dir = os.path.join('data', 'fsnet_train_data_test4_model', 'log')
             if not os.path.exists(model_dir):
                 app.logger.error(f"模型目录不存在: {model_dir}")
                 return False
@@ -1019,6 +1019,8 @@ def process_packet(packet):
 
     # 创建流标识符
     flow_id = f"{src_ip}:{src_port}-{dst_ip}:{dst_port}-{protocol}"
+    packet_length = len(packet)  # 获取数据包字节数
+    current_time = time.time()
 
     # 获取包长
     packet_length = len(packet)
@@ -1028,16 +1030,26 @@ def process_packet(packet):
     else:
         packet_length = -packet_length
 
-    # 更新流缓冲区
-    current_time = time.time()
+    # 初始化流统计（新增first_packet_time字段）
     if flow_id not in flow_buffer:
         flow_buffer[flow_id] = {
             'packets': [],
+            'bytes': 0,
+            'first_packet_time': current_time,  # 记录第一个包到达时间
             'start_time': current_time,
-            'last_update': current_time
+            'last_update': current_time,
+            'last_byte_time': current_time,
+            'bytes_per_second': 0
         }
 
     flow_buffer[flow_id]['packets'].append(packet_length)
+    flow_buffer[flow_id]['last_update'] = current_time
+
+    # 计算实时流量
+    time_diff = current_time - flow_buffer[flow_id]['last_byte_time']
+    if time_diff > 0:
+        flow_buffer[flow_id]['bytes_per_second'] = len(packet) / time_diff
+    flow_buffer[flow_id]['last_byte_time'] = current_time
     flow_buffer[flow_id]['last_update'] = current_time
 
     # 检查流是否满足预测条件
@@ -1052,6 +1064,10 @@ def process_packet(packet):
             prediction = model_service.logit_online(flow_data)
             pred_label = int(np.argmax(prediction))
             confidence = float(np.max(prediction[0]))  # 取最大概率作为置信度
+
+            # 计算响应时间（当前时间 - 第一个包到达时间）
+            response_time = current_time - flow_buffer[flow_id]['first_packet_time']
+
             # 将预测结果放入队列
             prediction_queue.put({
                 'flow_id': flow_id,
@@ -1059,6 +1075,8 @@ def process_packet(packet):
                 'confidence': confidence,
                 'timestamp': current_time,
                 'packet_count': len(flow_buffer[flow_id]['packets']),
+                'bytes_per_second': flow_buffer[flow_id]['bytes_per_second'],
+                'response_time': response_time,  # 新增响应时间
                 'src_ip': src_ip,
                 'dst_ip': dst_ip,
                 'src_port': src_port,
@@ -1153,17 +1171,56 @@ def realtime_monitor():
 
 
 
+# @app.route('/get_predictions')
+# def get_predictions():
+#     """获取预测结果（确保包含response_time）"""
+#     predictions = []
+#     while not prediction_queue.empty():
+#         pred = prediction_queue.get()
+#         # 设置默认值
+#         pred.setdefault('bytes_per_second', 0)
+#         pred.setdefault('response_time', 0)  # 新增
+#         predictions.append(pred)
+
+#     return jsonify({
+#         'status': 'success',
+#         'predictions': predictions
+#     })
 @app.route('/get_predictions')
 def get_predictions():
-    """获取预测结果"""
+    """获取预测结果，并统计各个类别的数量"""
     predictions = []
+    label_counts = defaultdict(int)  # 用于统计每种标签的数量
+
+    # 从模型目录读取标签映射
+    label_mapping = {
+        0: 'BENIGN',
+        1: 'Bot',
+        2: 'DDoS',
+        3: 'PortScan',
+        -1: 'UNKNOWN'
+    }
+
     while not prediction_queue.empty():
-        predictions.append(prediction_queue.get())
+        pred = prediction_queue.get()
+        label = pred['prediction']
+        label_name = label_mapping.get(label, 'UNKNOWN')
+
+        # 设置分类名称
+        pred['label_name'] = label_name
+        label_counts[label_name] += 1
+
+        # 设置默认值
+        pred.setdefault('bytes_per_second', 0)
+        pred.setdefault('response_time', 0)
+        predictions.append(pred)
 
     return jsonify({
         'status': 'success',
-        'predictions': predictions
+        'predictions': predictions,
+        'label_counts': dict(label_counts)  # 转换为普通字典
     })
+
 
 @app.route('/model_status')
 def model_status():
