@@ -385,22 +385,54 @@ function updatePredictions() {
 
 // 添加显示警告提示的函数
 function showAnomalyAlert(prediction) {
-    const alertDiv = document.createElement('div');
-    alertDiv.className = 'alert alert-danger alert-dismissible fade show mt-3';
-    alertDiv.innerHTML = `
-        <strong>检测到异常流量！</strong><br>
-        源IP: ${prediction.src_ip}:${prediction.src_port}<br>
-        目标IP: ${prediction.dst_ip}:${prediction.dst_port}<br>
-        协议: ${prediction.protocol}<br>
-        置信度: ${(prediction.confidence * 100).toFixed(2)}%
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    `;
-    document.querySelector('.card-body').insertBefore(alertDiv, document.querySelector('.row'));
+    // 创建 Toast 容器（如果不存在）
+    let toastContainer = document.getElementById('toast-container');
+    if (!toastContainer) {
+        toastContainer = document.createElement('div');
+        toastContainer.id = 'toast-container';
+        toastContainer.style.position = 'fixed';
+        toastContainer.style.top = '20px';
+        toastContainer.style.right = '20px';
+        toastContainer.style.zIndex = '9999';
+        document.body.appendChild(toastContainer);
+    }
 
-    // 5秒后自动关闭警告
+    // 创建 Toast
+    const toast = document.createElement('div');
+    toast.className = 'toast show';
+    toast.style.minWidth = '300px';
+    toast.innerHTML = `
+        <div class="toast-header bg-danger text-white">
+            <strong class="me-auto">检测到异常流量！</strong>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast"></button>
+        </div>
+        <div class="toast-body">
+            源IP: ${prediction.src_ip}:${prediction.src_port}<br>
+            目标IP: ${prediction.dst_ip}:${prediction.dst_port}<br>
+            协议: ${prediction.protocol}<br>
+            置信度: ${(prediction.confidence * 100).toFixed(2)}%
+        </div>
+    `;
+
+    // 添加到容器
+    toastContainer.appendChild(toast);
+
+    // 5秒后自动移除
     setTimeout(() => {
-        alertDiv.remove();
+        toast.remove();
+        // 如果容器为空，移除容器
+        if (toastContainer.children.length === 0) {
+            toastContainer.remove();
+        }
     }, 5000);
+
+    // 点击关闭按钮
+    toast.querySelector('.btn-close').addEventListener('click', () => {
+        toast.remove();
+        if (toastContainer.children.length === 0) {
+            toastContainer.remove();
+        }
+    });
 }
 
 // 开始监测
