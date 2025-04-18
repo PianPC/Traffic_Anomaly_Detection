@@ -7,58 +7,63 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
 def extract_flows(pcap_file, min_packets=20):
-    """
-    按照流提取数据包长度序列
-    流的定义：五元组 (src_ip, dst_ip, src_port, dst_port, protocol)
-
-    Args:
-        pcap_file: pcap文件路径
-        min_packets: 流中最小数据包个数，小于此数量的流将被过滤
-    """
-    print("正在处理"+pcap_file)
+    """提取流数据（增强元数据）"""
     packets = rdpcap(pcap_file)
     flows = defaultdict(list)
 
     for packet in packets:
         if 'IP' in packet and ('TCP' in packet or 'UDP' in packet):
-            # 获取IP层信息
+            # 提取五元组
             src_ip = packet['IP'].src
             dst_ip = packet['IP'].dst
-            protocol = packet['IP'].proto
+            proto = packet['IP'].proto
+            src_port = packet['TCP'].sport if 'TCP' in packet else packet['UDP'].sport
+            dst_port = packet['TCP'].dport if 'TCP' in packet else packet['UDP'].dport
 
-            # 获取传输层信息
-            if 'TCP' in packet:
-                src_port = packet['TCP'].sport
-                dst_port = packet['TCP'].dport
-            else:  # UDP
-                src_port = packet['UDP'].sport
-                dst_port = packet['UDP'].dport
-
-            # 获取时间戳
-            timestamp = packet.time
-
-            # 确保源IP小于目的IP，以统一双向流的键
+            # 生成标准化flow_id
             if src_ip < dst_ip:
-                flow_key = (src_ip, dst_ip, src_port, dst_port, protocol)
-                length = len(packet)
+                flow_id = f"{src_ip}:{src_port}→{dst_ip}:{dst_port}({proto})"
+                direction = 1
             else:
-                flow_key = (dst_ip, src_ip, dst_port, src_port, protocol)
-                length = -len(packet)  # 负值表示反向
+                flow_id = f"{dst_ip}:{dst_port}→{src_ip}:{src_port}({proto})"
+                direction = -1
 
-            flows[flow_key].append((length, timestamp))
-
-    # 筛选长度大于等于min_packets的流
-    filtered_flows = []
-    for flow in flows.values():
-        if len(flow) >= min_packets:
-            packet_lengths = [int(pkt[0]) for pkt in flow]  # 转换为 float
-            time_deltas = [0.0] + [float(flow[i][1] - flow[i-1][1]) for i in range(1, len(flow))]  # 转换为 float
-            filtered_flows.append({
-                "packet_length": packet_lengths,
-                "arrive_time_delta": time_deltas
+            # 记录包数据
+            flows[flow_id].append({
+                'timestamp': float(packet.time),
+                'length': len(packet) * direction,
+                'direction': direction
             })
 
-    return filtered_flows
+    # 转换为输出格式
+    output_flows = []
+    for flow_id, packets in flows.items():
+        if len(packets) < min_packets:
+            continue
+
+        # 计算流统计信息
+        packets.sort(key=lambda x: x['timestamp'])
+        time_deltas = [0.0] + [
+            packets[i]['timestamp'] - packets[i-1]['timestamp']
+            for i in range(1, len(packets))
+        ]
+
+        output_flows.append({
+            'flow_id': flow_id,
+            'src_ip': flow_id.split('→')[0].split(':')[0],
+            'dst_ip': flow_id.split('→')[1].split(':')[0],
+            'src_port': int(flow_id.split('→')[0].split(':')[1]),
+            'dst_port': int(flow_id.split('→')[1].split(':')[0]),
+            'protocol': 'TCP' if 'TCP' in str(packets[0]) else 'UDP',
+            'start_time': packets[0]['timestamp'],
+            'end_time': packets[-1]['timestamp'],
+            'duration': packets[-1]['timestamp'] - packets[0]['timestamp'],
+            'total_bytes': sum(abs(p['length']) for p in packets),
+            'packet_length': [p['length'] for p in packets],
+            'arrive_time_delta': time_deltas
+        })
+
+    return output_flows
 
 def process_file(file_path, label_dir, min_packets):
     """

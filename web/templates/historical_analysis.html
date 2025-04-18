@@ -110,9 +110,12 @@
                         <table class="table">
                             <thead>
                                 <tr>
-                                    <th>时间</th>
-                                    <th>流量大小</th>
-                                    <th>数据包数量</th>
+                                    <th>流ID</th>
+                                    <th>源IP：端口</th>
+                                    <th>目的IP：端口</th>
+                                    <th>协议</th>
+                                    <th>持续时间</th>
+                                    <th>总流量</th>
                                     <th>异常类型</th>
                                     <th>置信度</th>
                                 </tr>
@@ -360,6 +363,122 @@ document.getElementById('startAnalysisBtn').addEventListener('click', function()
     });
 });
 
+// 修改上传处理逻辑
+document.getElementById('uploadForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    // 第一阶段：处理PCAP
+    fetch('/process_pcap', {
+        method: 'POST',
+        body: formData
+    }).then(response => response.json())
+      .then(data => {
+          if (data.status === 'success') {
+              // 立即显示流量图
+              updateTrafficChart(data.traffic_data);
+
+              // 保存文件路径供后续分析使用
+              currentFilePath = fileInput.files[0].name;
+
+              // 启用分析按钮
+              document.getElementById('startAnalysisBtn').disabled = false;
+          }
+      });
+});
+
+// document.getElementById('uploadForm').addEventListener('submit', function(e) {
+//     e.preventDefault();
+//     const fileInput = document.getElementById('fileInput');
+//     const file = fileInput.files[0];
+
+//     if (!file) {
+//         alert('请选择文件');
+//         return;
+//     }
+
+//     const formData = new FormData();
+//     formData.append('file', file);
+
+//     // 显示上传进度
+//     const progressBar = document.getElementById('uploadProgress');
+//     progressBar.style.width = '0%';
+//     progressBar.textContent = '0%';
+
+//     // 使用fetch API替代XHR以获得更清晰的Promise链
+//     fetch('/historical_analysis', {
+//         method: 'POST',
+//         body: formData
+//     })
+//     .then(response => {
+//         if (!response.ok) {
+//             throw new Error(`HTTP error! status: ${response.status}`);
+//         }
+//         return response.json();
+//     })
+//     .then(data => {
+//         if (data.status === 'success') {
+//             // 功能1：刷新数据集列表
+//             loadDatasets();
+
+//             // 功能2：显示流量预览（如果返回了流量数据）
+//             if (data.traffic_data) {
+//                 updateTrafficChart(data.traffic_data);
+//             }
+
+//             // 功能3：保存文件信息供后续分析
+//             currentFilePath = file.name;
+
+//             // 启用分析按钮（如果存在）
+//             const analysisBtn = document.getElementById('startAnalysisBtn');
+//             if (analysisBtn) {
+//                 analysisBtn.disabled = false;
+//             }
+
+//             alert('文件上传并处理成功');
+//         } else {
+//             alert('文件处理失败: ' + (data.message || '未知错误'));
+//         }
+//     })
+//     .catch(error => {
+//         console.error('上传失败:', error);
+//         alert('文件上传处理失败: ' + error.message);
+//     });
+// });
+// 新增独立的流量图更新函数
+function updateTrafficChart(trafficData) {
+    const option = {
+        xAxis: {
+            type: 'category',
+            data: trafficData.map(item => new Date(item.time * 1000).toLocaleTimeString())
+        },
+        series: [{
+            data: trafficData.map(item => item.value),
+            type: 'bar',  // 使用柱状图更直观
+            barWidth: '60%'
+        }]
+    };
+    trafficChart.setOption(option);
+}
+
+// 修改分析按钮逻辑
+document.getElementById('startAnalysisBtn').addEventListener('click', function() {
+    fetch('/analyze_json', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            json_path: currentFilePath
+        })
+    }).then(response => response.json())
+      .then(data => {
+          if (data.status === 'success') {
+              updateAnomalyChart(data.anomalies);
+              updateResultTable(data.details);
+          }
+      });
+});
+
 // 显示提示的函数
 function showAlert(message, type) {
     const alertDiv = document.createElement('div');
@@ -398,40 +517,73 @@ function updateCharts(data) {
     }
 }
 
-// 更新结果表格
+// // 更新结果表格
+// function updateResultTable(data) {
+//     const tbody = document.getElementById('resultTable');
+//     tbody.innerHTML = '';
+
+//     if (data.details) {
+//         data.details.forEach(item => {
+//             const row = document.createElement('tr');
+
+//             // 根据异常类型设置行样式
+//             if (item.anomaly_type === 'BENIGN') {
+//                 row.className = 'table-success';
+//             } else if (item.anomaly_type === 'UNKNOWN') {
+//                 row.className = 'table-primary';
+//             } else {
+//                 // 异常流量根据类型设置不同颜色
+//                 const anomalyColors = {
+//                     'Bot': 'table-warning',    // 黄色
+//                     'DDoS': 'table-danger',    // 红色
+//                     'PortScan': 'table-orange' // 橙色
+//                 };
+//                 row.className = anomalyColors[item.anomaly_type] || 'table-danger';
+//             }
+
+//             row.innerHTML = `
+//                 <td>${item.time}</td>
+//                 <td>${(item.size / 1024).toFixed(2)} KB</td>
+//                 <td>${item.packet_count}</td>
+//                 <td>${item.anomaly_type}</td>
+//                 <td>${item.confidence}%</td>
+//             `;
+//             tbody.appendChild(row);
+//         });
+//     }
+// }
+
+// 渲染详细结果表格
 function updateResultTable(data) {
-    const tbody = document.getElementById('resultTable');
-    tbody.innerHTML = '';
+    const table = document.getElementById('resultTable');
+    table.innerHTML = `
 
-    if (data.details) {
-        data.details.forEach(item => {
-            const row = document.createElement('tr');
+        <tbody>
+            ${data.details.map(item => `
+                <tr class="${getRowClass(item.anomaly_type)}">
+                    <td>${item.flow_id}</td>
+                    <td>${item.src_ip}</td>
+                    <td>${item.dst_ip}</td>
+                    <td>${item.protocol || 'TCP/UDP'}</td>
+                    <td>${item.duration ? item.duration.toFixed(2)+'s' : 'N/A'}</td>
+                    <td>${(item.size / 1024).toFixed(2)} KB</td>
+                    <td>${item.anomaly_type}</td>
+                    <td>${item.confidence}%</td>
+                </tr>
+            `).join('')}
+        </tbody>
+    `;
+}
 
-            // 根据异常类型设置行样式
-            if (item.anomaly_type === 'BENIGN') {
-                row.className = 'table-success';
-            } else if (item.anomaly_type === 'UNKNOWN') {
-                row.className = 'table-primary';
-            } else {
-                // 异常流量根据类型设置不同颜色
-                const anomalyColors = {
-                    'Bot': 'table-warning',    // 黄色
-                    'DDoS': 'table-danger',    // 红色
-                    'PortScan': 'table-orange' // 橙色
-                };
-                row.className = anomalyColors[item.anomaly_type] || 'table-danger';
-            }
-
-            row.innerHTML = `
-                <td>${item.time}</td>
-                <td>${(item.size / 1024).toFixed(2)} KB</td>
-                <td>${item.packet_count}</td>
-                <td>${item.anomaly_type}</td>
-                <td>${item.confidence}%</td>
-            `;
-            tbody.appendChild(row);
-        });
-    }
+// 根据异常类型设置行样式
+function getRowClass(anomalyType) {
+    const map = {
+        'BENIGN': 'table-success',
+        'Bot': 'table-warning',
+        'DDoS': 'table-danger',
+        'PortScan': 'table-info'
+    };
+    return map[anomalyType] || '';
 }
 
 // 页面加载时初始化
