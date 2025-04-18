@@ -2,8 +2,9 @@ from scapy.all import rdpcap
 import os
 import pickle
 import json
-from collections import defaultdict
+from collections import defaultdict, Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
+
 
 def extract_flows(pcap_file, min_packets=20):
     """
@@ -73,57 +74,109 @@ def process_file(file_path, label_dir, min_packets):
         print(f"处理文件 {file_path} 时出错: {str(e)}")
         return [], []
 
+# def process_dataset(dataset_dir, output_dir, min_packets=20, num_workers=None):
+#     """
+#     处理数据集并保存结果
+
+#     Args:
+#         dataset_dir: 数据集目录路径
+#         output_dir: 输出目录路径
+#         min_packets: 流中最小数据包个数
+#         num_workers: 进程池中的最大工作进程数
+#     """
+#     flow_data = defaultdict(list)  # 存储每个标签的流数据
+
+#     # 确保输出目录存在
+#     os.makedirs(output_dir, exist_ok=True)
+
+#     # 使用进程池进行多进程处理
+#     with ProcessPoolExecutor(max_workers=num_workers) as executor:
+#         futures = []
+
+#         # 遍历数据集目录
+#         for label_dir in os.listdir(dataset_dir):
+#             label_path = os.path.join(dataset_dir, label_dir)
+#             if os.path.isdir(label_path):
+#                 print(f"处理标签: {label_dir}")
+
+#                 for file in os.listdir(label_path):
+#                     if file.endswith(('.pcap', '.pcapng')):
+#                         file_path = os.path.join(label_path, file)
+#                         print(f"提交文件到进程池: {file}")
+#                         futures.append(executor.submit(process_file, file_path, label_dir, min_packets))
+
+#         # 收集结果
+#         for future in as_completed(futures):
+#             flows, file_labels = future.result()
+#             for flow, label in zip(flows, file_labels):
+#                 flow_data[label].append(flow)
+
+#     # 保存结果到JSON文件
+#     for label, data in flow_data.items():
+#         json_path = os.path.join(output_dir, f'{label}.json')
+#         print(f"保存流数据到: {json_path}")
+#         with open(json_path, 'w') as f:
+#             json.dump(data, f, indent=4)
+
+#     print(f"\n处理完成:")
+#     print(f"总共提取了 {len(flow_data)} 个有效流")
+#     print(f"每个流至少包含 {min_packets} 个数据包")
+#     print(f"\n标签统计:")
+#     from collections import Counter
+#     for label, count in Counter(file_labels).items():
+#         print(f"{label}: {count}")
+
 def process_dataset(dataset_dir, output_dir, min_packets=20, num_workers=None):
     """
-    处理数据集并保存结果
+    处理直接包含PCAP文件的目录（无子文件夹）
+    使用文件名（不带扩展名）作为标签
 
     Args:
-        dataset_dir: 数据集目录路径
-        output_dir: 输出目录路径
-        min_packets: 流中最小数据包个数
-        num_workers: 进程池中的最大工作进程数
+        dataset_dir: 包含PCAP文件的目录
+        output_dir: 输出目录
+        min_packets: 流的最小包数
+        num_workers: 进程数
     """
-    flow_data = defaultdict(list)  # 存储每个标签的流数据
+    flow_data = defaultdict(list)  # 存储流数据，按标签分类
+    all_labels = []  # 记录所有标签用于统计
 
     # 确保输出目录存在
     os.makedirs(output_dir, exist_ok=True)
 
-    # 使用进程池进行多进程处理
+    # 使用进程池处理
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         futures = []
 
-        # 遍历数据集目录
-        for label_dir in os.listdir(dataset_dir):
-            label_path = os.path.join(dataset_dir, label_dir)
-            if os.path.isdir(label_path):
-                print(f"处理标签: {label_dir}")
-
-                for file in os.listdir(label_path):
-                    if file.endswith(('.pcap', '.pcapng')):
-                        file_path = os.path.join(label_path, file)
-                        print(f"提交文件到进程池: {file}")
-                        futures.append(executor.submit(process_file, file_path, label_dir, min_packets))
+        # 直接遍历dataset_dir下的文件
+        for file in os.listdir(dataset_dir):
+            if file.lower().endswith(('.pcap', '.pcapng')):
+                file_path = os.path.join(dataset_dir, file)
+                # 使用文件名（不带扩展名）作为标签
+                label = os.path.splitext(file)[0]
+                print(f"提交文件到进程池: {file} (标签: {label})")
+                futures.append(executor.submit(process_file, file_path, label, min_packets))
 
         # 收集结果
         for future in as_completed(futures):
-            flows, file_labels = future.result()
-            for flow, label in zip(flows, file_labels):
+            flows, labels = future.result()
+            all_labels.extend(labels)
+            for flow, label in zip(flows, labels):
                 flow_data[label].append(flow)
 
-    # 保存结果到JSON文件
-    for label, data in flow_data.items():
-        json_path = os.path.join(output_dir, f'{label}.json')
-        print(f"保存流数据到: {json_path}")
-        with open(json_path, 'w') as f:
-            json.dump(data, f, indent=4)
+    # 保存结果到JSON文件（每个标签单独文件）
+    total_flows = 0
+    for label, flows in flow_data.items():
+        total_flows += len(flows)
+        output_path = os.path.join(output_dir, f"{label}.json")
+        with open(output_path, 'w') as f:
+            json.dump(flows, f, indent=4)
+        print(f"已保存 {len(flows)} 个流到 {output_path}")
 
-    print(f"\n处理完成:")
-    print(f"总共提取了 {len(flow_data)} 个有效流")
-    print(f"每个流至少包含 {min_packets} 个数据包")
-    print(f"\n标签统计:")
-    from collections import Counter
-    for label, count in Counter(file_labels).items():
-        print(f"{label}: {count}")
+    # 打印统计信息
+    print(f"\n处理完成: 共提取 {total_flows} 个流")
+    print("标签统计:", dict(Counter(all_labels)))
+
+    return {'status': 'success', 'total_flows': total_flows}
 
 if __name__ == "__main__":
     # 设置参数

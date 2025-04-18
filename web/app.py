@@ -22,6 +22,7 @@ from functools import partial
 from collections import defaultdict
 from models.dl.fsnet.fsnet_main_model import model as FSNetModel
 import tensorflow as tf
+from modules.pcap_to_json import process_dataset as process_single_dataset
 
 
 app = Flask(
@@ -239,17 +240,21 @@ def historical_analysis():
         if 'file' not in request.files:
             return jsonify({'status': 'error', 'message': '没有文件被上传'})
 
+        # 获取上传的文件对象
         file = request.files['file']
         if file.filename == '':
+            # 检查是否选择了文件
             return jsonify({'status': 'error', 'message': '没有选择文件'})
 
         if file:
             try:
-                # 检查文件大小（保持不变）
+                # 检查文件大小（保持不变），将指针移动到文件末尾
                 file.seek(0, 2)
+                # 获取当前指针位置（即文件大小）
                 file_size = file.tell()
                 file.seek(0)
 
+                # 检查文件大小是否超过配置限制
                 if app.config['MAX_CONTENT_LENGTH'] and file_size > app.config['MAX_CONTENT_LENGTH']:
                     return jsonify({'status': 'error', 'message': '文件大小超过限制'})
 
@@ -257,17 +262,27 @@ def historical_analysis():
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 dataset_name = f"data_{timestamp}"
                 original_dir = os.path.join(app.config['ORIGINAL_DATA_FOLDER'], 'historical_analysis', dataset_name)
-                dataset_dir = os.path.join(app.config['DATASET_FOLDER'], 'historical_analysis',dataset_name)
+                dataset_dir = os.path.join(app.config['DATASET_FOLDER'], dataset_name)
                 os.makedirs(original_dir, exist_ok=True)
                 os.makedirs(dataset_dir, exist_ok=True)
 
                 # 保存原始文件
+                # 对文件名进行安全处理
                 filename = secure_filename(file.filename)
+                # 构建原始文件完整路径
                 original_path = os.path.join(original_dir, filename)
+                # 保存上传的文件
                 file.save(original_path)
 
+                # 检查文件扩展名是否为网络抓包文件
                 if filename.lower().endswith(('.pcap', '.pcapng')):
-                    result = process_pcap_file(original_path, dataset_dir)
+                    # 处理PCAP文件并获取结果
+                    result = process_single_dataset(
+                        original_dir,
+                        dataset_dir,
+                        min_packets=1,
+                        num_workers=4  # 大幅减少工作进程数
+                    )
                 else:
                     return jsonify({
                         'status': 'error',
@@ -312,30 +327,30 @@ def check_processing_status():
     else:
         return jsonify({'status': 'completed'})
 
-@app.route('/process_dataset', methods=['POST'])
-def process_dataset():
-    try:
-        data = request.json
-        dataset_directory = data.get('dataset_directory')
-        output_directory = data.get('output_directory')
-        is_training = data.get('is_training', False)
+# @app.route('/process_dataset', methods=['POST'])
+# def process_dataset():
+#     try:
+#         data = request.json
+#         dataset_directory = data.get('dataset_directory')
+#         output_directory = data.get('output_directory')
+#         is_training = data.get('is_training', False)
 
-        if is_training:
-            # 调用预训练函数
-            pre_train(dataset_directory)
+#         if is_training:
+#             # 调用预训练函数
+#             pre_train(dataset_directory)
 
-        # 调用 tojson.py 处理数据集
-        result = process_dataset(dataset_directory, output_directory)
+#         # 调用 tojson.py 处理数据集
+#         result = process_dataset(dataset_directory, output_directory)
 
-        return jsonify({
-            'status': 'success',
-            'message': '预处理完成'
-        })
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        })
+#         return jsonify({
+#             'status': 'success',
+#             'message': '预处理完成'
+#         })
+#     except Exception as e:
+#         return jsonify({
+#             'status': 'error',
+#             'message': str(e)
+#         })
 
 def process_pcap_file(file_path, output_dir):
     """多进程处理PCAP文件，按流分类保存为JSON格式"""
@@ -493,81 +508,188 @@ def save_results(label_to_flows, output_dir):
         app.logger.error(f"处理PCAP数据块时出错: {str(e)}")
         return {}
 
-@app.route('/analyze_data', methods=['POST'])
-def analyze_data():
-    data = request.json
-    model_name = data.get('model')
-    filename = data.get('filename')
+# @app.route('/analyze_data', methods=['POST'])
+# def analyze_data():
+#     data = request.json
+#     model_name = data.get('model')
+#     filename = data.get('filename')
 
+#     try:
+#         file_path = os.path.join(app.config['DATASET_FOLDER'], filename)
+#         if not os.path.exists(file_path):
+#             return jsonify({
+#                 'status': 'error',
+#                 'message': '文件不存在'
+#             })
+
+#         # 初始化模型
+#         model_path = os.path.join(app.config['MODEL_FOLDER'], model_name)
+#         if not os.path.exists(model_path):
+#             return jsonify({
+#                 'status': 'error',
+#                 'message': '模型不存在'
+#             })
+
+#         model_module = __import__(f'models.{model_name.split("_")[0]}.model', fromlist=['ModelPredictor'])
+#         model_predictor = model_module.ModelPredictor(model_path)
+
+#         # 加载数据
+#         data_processor = DataProcessor()
+#         flows = data_processor.load_from_json(file_path)
+
+#         # 分析数据
+#         results = []
+#         for flow in flows:
+#             prediction = model_predictor.predict(flow)
+#             results.append(prediction)
+
+#         # 计算统计信息
+#         total_flows = len(results)
+#         normal_flows = sum(1 for r in results if r == 0)
+#         anomaly_flows = sum(1 for r in results if r == 1)
+
+#         if total_flows > 0:
+#             normal_percent = (normal_flows / total_flows) * 100
+#             anomaly_percent = (anomaly_flows / total_flows) * 100
+#         else:
+#             normal_percent = 100
+#             anomaly_percent = 0
+
+#         # 准备返回数据
+#         analysis_result = {
+#             'traffic_distribution': [
+#                 {'value': normal_percent, 'name': '正常流量'},
+#                 {'value': anomaly_percent, 'name': '异常流量'}
+#             ],
+#             'anomaly_types': {
+#                 'DDoS攻击': anomaly_flows,
+#                 '端口扫描': 0,
+#                 '其他异常': 0
+#             },
+#             'file_size': f"{os.path.getsize(file_path) / (1024*1024):.2f}MB",
+#             'total_flows': total_flows,
+#             'anomaly_flows': anomaly_flows,
+#             'accuracy': 95.5,  # 这里可以添加实际的准确率计算
+#             'detailed_analysis': f"检测到{anomaly_flows}个异常流量，包括{anomaly_flows}个DDoS攻击。"
+#         }
+
+#         return jsonify({
+#             'status': 'success',
+#             'data': analysis_result
+#         })
+#     except Exception as e:
+#         app.logger.error(f"分析错误: {str(e)}")
+#         return jsonify({
+#             'status': 'error',
+#             'message': str(e)
+#         })
+
+def predict_from_json(json_path, model_name, dataset_name):
+    """从JSON文件读取数据并进行预测"""
     try:
-        file_path = os.path.join(app.config['DATASET_FOLDER'], filename)
-        if not os.path.exists(file_path):
-            return jsonify({
-                'status': 'error',
-                'message': '文件不存在'
-            })
+        # 加载模型
+        if not load_model(model_name, dataset_name):
+            return {'status': 'error', 'message': '模型加载失败'}
 
-        # 初始化模型
-        model_path = os.path.join(app.config['MODEL_FOLDER'], model_name)
-        if not os.path.exists(model_path):
-            return jsonify({
-                'status': 'error',
-                'message': '模型不存在'
-            })
+        # 读取JSON文件
+        with open(json_path, 'r') as f:
+            flow_data = json.load(f)
 
-        model_module = __import__(f'models.{model_name.split("_")[0]}.model', fromlist=['ModelPredictor'])
-        model_predictor = model_module.ModelPredictor(model_path)
+        if not isinstance(flow_data, list) or len(flow_data) == 0:
+            return {'status': 'error', 'message': '无效的JSON数据格式'}
 
-        # 加载数据
-        data_processor = DataProcessor()
-        flows = data_processor.load_from_json(file_path)
-
-        # 分析数据
-        results = []
-        for flow in flows:
-            prediction = model_predictor.predict(flow)
-            results.append(prediction)
-
-        # 计算统计信息
-        total_flows = len(results)
-        normal_flows = sum(1 for r in results if r == 0)
-        anomaly_flows = sum(1 for r in results if r == 1)
-
-        if total_flows > 0:
-            normal_percent = (normal_flows / total_flows) * 100
-            anomaly_percent = (anomaly_flows / total_flows) * 100
-        else:
-            normal_percent = 100
-            anomaly_percent = 0
-
-        # 准备返回数据
-        analysis_result = {
-            'traffic_distribution': [
-                {'value': normal_percent, 'name': '正常流量'},
-                {'value': anomaly_percent, 'name': '异常流量'}
-            ],
-            'anomaly_types': {
-                'DDoS攻击': anomaly_flows,
-                '端口扫描': 0,
-                '其他异常': 0
-            },
-            'file_size': f"{os.path.getsize(file_path) / (1024*1024):.2f}MB",
-            'total_flows': total_flows,
-            'anomaly_flows': anomaly_flows,
-            'accuracy': 95.5,  # 这里可以添加实际的准确率计算
-            'detailed_analysis': f"检测到{anomaly_flows}个异常流量，包括{anomaly_flows}个DDoS攻击。"
+        # 准备预测结果数据结构
+        results = {
+            'traffic': [],
+            'anomalies': [],
+            'details': []
         }
 
-        return jsonify({
-            'status': 'success',
-            'data': analysis_result
-        })
+        # 统计各类异常数量
+        anomaly_counts = {}
+        total_flows = len(flow_data)
+
+        # 对每个流进行预测
+        for i, flow in enumerate(flow_data):
+            # 确保flow_data是一个列表
+            if not isinstance(flow['packet_length'], list):
+                flow_data = [flow['packet_length']]
+            else:
+                flow_data = [flow['packet_length']]
+
+            # 进行预测
+            prediction = model_service.logit_online(flow_data)
+            pred_label = int(np.argmax(prediction))
+            confidence = float(np.max(prediction[0]))
+
+            # 记录预测结果
+            anomaly_type = "正常" if pred_label == 0 else f"异常类型{pred_label}"
+
+            # 更新异常统计
+            if anomaly_type not in anomaly_counts:
+                anomaly_counts[anomaly_type] = 0
+            anomaly_counts[anomaly_type] += 1
+
+            # 添加详细结果
+            results['details'].append({
+                'time': i,  # 可以用实际时间戳替换
+                'size': sum(abs(p) for p in flow['packet_length']),
+                'packet_count': len(flow['packet_length']),
+                'anomaly_type': anomaly_type,
+                'confidence': round(confidence * 100, 2)
+            })
+
+            # 添加流量数据（简化示例）
+            results['traffic'].append({
+                'time': i,
+                'value': len(flow['packet_length'])
+            })
+
+        # 准备饼图数据
+        for anomaly, count in anomaly_counts.items():
+            results['anomalies'].append({
+                'name': anomaly,
+                'value': count
+            })
+
+        return {'status': 'success', 'data': results}
+
     except Exception as e:
-        app.logger.error(f"分析错误: {str(e)}")
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        })
+        app.logger.error(f"预测失败: {str(e)}")
+        return {'status': 'error', 'message': str(e)}
+    finally:
+        # 清理模型
+        if model_service:
+            try:
+                if hasattr(model_service, 'close'):
+                    model_service.close()
+            except Exception as e:
+                app.logger.warning(f"模型关闭异常: {str(e)}")
+            model_service = None
+
+@app.route('/analyze_data', methods=['POST'])
+def analyze_data():
+    """处理历史数据分析请求"""
+    data = request.get_json()
+    model_name = data.get('model')
+    dataset_name = data.get('dataset')
+
+    if not model_name or not dataset_name:
+        return jsonify({'status': 'error', 'message': '缺少模型或数据集参数'})
+
+    # 构建JSON文件路径
+    json_path = os.path.join(app.config['DATASET_FOLDER'], dataset_name, f"{dataset_name}.json")
+
+    if not os.path.exists(json_path):
+        return jsonify({'status': 'error', 'message': f'数据集文件不存在: {json_path}'})
+
+    # 进行预测
+    result = predict_from_json(json_path, model_name, dataset_name)
+
+    if result['status'] == 'success':
+        return jsonify(result)
+    else:
+        return jsonify({'status': 'error', 'message': result['message']})
 
 @app.route('/model_training', methods=['GET', 'POST'])
 def model_training():
@@ -926,51 +1048,6 @@ def upload_training_dataset():
             'status': 'error',
             'message': f'上传失败: {str(e)}'
         })
-
-
-def analyze_packets(packets, session_id, dataset_name):
-    try:
-        if model_predictor is None:
-            return
-
-        # 使用模型进行预测
-        predictions = model_predictor.predict_batch(packets)
-
-        # 统计结果
-        normal_count = sum(1 for p in predictions if p == 0)
-        anomaly_count = sum(1 for p in predictions if p == 1)
-
-        total = normal_count + anomaly_count
-        if total > 0:
-            normal_percent = (normal_count / total) * 100
-            anomaly_percent = (anomaly_count / total) * 100
-        else:
-            normal_percent = 100
-            anomaly_percent = 0
-
-        # 更新实时数据
-        analysis_result = {
-            'session_id': session_id,
-            'dataset_name': dataset_name,
-            'timestamp': datetime.now().isoformat(),
-            'traffic': [
-                {'name': datetime.now().strftime('%H:%M:%S'), 'value': len(packets)}
-            ],
-            'anomaly': [
-                {'value': normal_percent, 'name': '正常'},
-                {'value': anomaly_percent, 'name': '异常'}
-            ],
-            'statistics': {
-                'total_packets': total,
-                'normal_packets': normal_count,
-                'anomaly_packets': anomaly_count
-            }
-        }
-
-        realtime_data_queue.put(analysis_result)
-
-    except Exception as e:
-        app.logger.error(f"分析错误: {str(e)}")
 
 def load_model(model_name):
     """加载指定的模型"""

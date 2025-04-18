@@ -16,7 +16,7 @@
                                 <a class="nav-link active" data-bs-toggle="tab" href="#uploadTab">上传PCAP文件</a>
                             </li>
                             <li class="nav-item">
-                                <a class="nav-link" data-bs-toggle="tab" href="#selectTab">选择处理数据</a>
+                                <a class="nav-link" data-bs-toggle="tab" href="#selectTab" id="selectDatasetTab">选择处理数据</a>
                             </li>
                         </ul>
                     </div>
@@ -37,9 +37,6 @@
                                             <div class="progress mb-3" style="height: 20px;">
                                                 <div class="progress-bar" id="uploadProgress" role="progressbar" style="width: 0%">0%</div>
                                             </div>
-                                            <!-- <div class="progress mb-3" style="height: 20px;">
-                                                <div class="progress-bar progress-bar-striped progress-bar-animated" id="processProgress" role="progressbar" style="width: 0%">处理中 0%</div>
-                                            </div> -->
                                             <button type="submit" class="btn btn-primary" id="uploadBtn">上传文件</button>
                                         </form>
                                     </div>
@@ -47,8 +44,21 @@
                             </div>
                             <!-- 选择处理数据 -->
                             <div class="tab-pane fade" id="selectTab">
-                                <div class="list-group" id="datasetList">
-                                    <!-- 数据集列表将通过JavaScript动态添加 -->
+                                <div class="card mb-4">
+                                    <div class="card-header">
+                                        <h5>选择数据集</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="mb-3">
+                                            <label class="form-label">选择数据集</label>
+                                            <select class="form-select" id="datasetSelect">
+                                                <option value="">加载中...</option>
+                                            </select>
+                                        </div>
+                                        <div class="alert alert-info" id="datasetInfo">
+                                            请从下拉列表中选择数据集
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -59,10 +69,13 @@
                 <div class="card">
                     <div class="card-header">选择检测模型</div>
                     <div class="card-body">
-                        <select class="form-select" id="modelSelect">
-                            <!-- 模型选项将通过JavaScript动态添加 -->
-                        </select>
-                        <button class="btn btn-primary mt-3" id="startAnalysisBtn" disabled>开始分析</button>
+                        <div class="mb-3">
+                            <label class="form-label">选择模型</label>
+                            <select class="form-select" id="modelSelect">
+                                <option value="">加载中...</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary w-100" id="startAnalysisBtn" disabled>开始分析</button>
                     </div>
                 </div>
             </div>
@@ -173,84 +186,73 @@ let anomalyOption = {
 trafficChart.setOption(trafficOption);
 anomalyChart.setOption(anomalyOption);
 
-// 加载模型列表**
+// 加载模型列表
 function loadModels() {
-    console.log('开始加载模型列表...');
     const select = document.getElementById('modelSelect');
-    select.innerHTML = '<option value="">请选择模型</option>';
+    select.innerHTML = '<option value="">加载中...</option>';
 
     fetch('/get_available_models')
-        .then(response => {
-            console.log('获取模型列表响应状态:', response.status);
-            return response.json();
-        })
+        .then(response => response.json())
         .then(data => {
-            console.log('获取模型列表响应数据:', data);
+            select.innerHTML = '<option value="">请选择模型</option>';
+
             if (data.status === 'success') {
-                if (data.models && data.models.length > 0) {
-                    data.models.forEach(model => {
-                        console.log('添加模型选项:', model);
-                        const option = document.createElement('option');
-                        option.value = model.name;
-                        option.textContent = `${model.name} (${model.type})`;
-                        select.appendChild(option);
-                    });
-                    console.log('成功加载模型列表，共', data.models.length, '个模型');
-                } else {
-                    console.log('没有找到模型');
+                data.models.forEach(model => {
                     const option = document.createElement('option');
-                    option.value = '';
-                    option.textContent = '没有可用的模型';
+                    option.value = model.name;
+                    option.textContent = `${model.name} (${model.type})`;
                     select.appendChild(option);
-                }
+                });
             } else {
-                console.error('加载模型列表失败:', data.message);
                 const option = document.createElement('option');
                 option.value = '';
-                option.textContent = '加载模型列表失败: ' + data.message;
+                option.textContent = '加载模型列表失败';
                 select.appendChild(option);
             }
         })
         .catch(error => {
             console.error('加载模型列表失败:', error);
-            const option = document.createElement('option');
-            option.value = '';
-            option.textContent = '加载模型列表失败: ' + error.message;
-            select.appendChild(option);
+            select.innerHTML = '<option value="">加载失败，请刷新重试</option>';
         });
 }
 
 // 加载数据集列表
 function loadDatasets() {
+    const select = document.getElementById('datasetSelect');
+    const info = document.getElementById('datasetInfo');
+
+    select.innerHTML = '<option value="">加载中...</option>';
+    info.textContent = '正在加载数据集列表...';
+
     fetch('/get_datasets')
         .then(response => response.json())
         .then(data => {
+            select.innerHTML = '<option value="">请选择数据集</option>';
+
             if (data.status === 'success') {
-                const list = document.getElementById('datasetList');
-                list.innerHTML = '';
-                data.datasets.forEach(dataset => {
-                    const item = document.createElement('a');
-                    item.href = '#';
-                    item.className = 'list-group-item list-group-item-action';
-                    item.setAttribute('data-dataset', dataset.name);
-                    item.innerHTML = `
-                        <div class="d-flex w-100 justify-content-between">
-                            <h6 class="mb-1">${dataset.name}</h6>
-                            <small>文件数: ${dataset.file_count}</small>
-                        </div>
-                        <p class="mb-1">路径: ${dataset.path}</p>
-                    `;
-                    item.addEventListener('click', function(e) {
-                        e.preventDefault();
-                        document.querySelectorAll('#datasetList a').forEach(a => a.classList.remove('active'));
-                        this.classList.add('active');
-                        document.getElementById('startAnalysisBtn').disabled = false;
+                if (data.datasets && data.datasets.length > 0) {
+                    data.datasets.forEach(dataset => {
+                        const option = document.createElement('option');
+                        option.value = dataset.name;
+                        option.textContent = `${dataset.name} (${dataset.file_count}个文件)`;
+                        option.dataset.path = dataset.path; // 存储额外信息
+                        select.appendChild(option);
                     });
-                    list.appendChild(item);
-                });
+                    info.textContent = `共找到 ${data.datasets.length} 个数据集`;
+                } else {
+                    select.innerHTML = '<option value="">没有可用数据集</option>';
+                    info.textContent = '没有找到数据集';
+                }
+            } else {
+                select.innerHTML = '<option value="">加载数据集失败</option>';
+                info.textContent = '加载数据集失败: ' + (data.message || '未知错误');
             }
         })
-        .catch(error => console.error('加载数据集失败:', error));
+        .catch(error => {
+            console.error('加载数据集失败:', error);
+            select.innerHTML = '<option value="">加载失败，请刷新重试</option>';
+            info.textContent = '加载数据集失败: ' + error.message;
+        });
 }
 
 // 文件上传处理
@@ -279,41 +281,19 @@ document.getElementById('uploadForm').addEventListener('submit', function(e) {
         if (xhr.status === 200) {
             const response = JSON.parse(xhr.responseText);
             if (response.status === 'success') {
-                // 开始监听处理进度
-                const processProgress = document.getElementById('processProgress');
-                processProgress.style.width = '0%';
-                processProgress.textContent = '处理中 0%';
-                processProgress.style.display = 'block';
-
-                // 使用EventSource监听处理进度
-                const eventSource = new EventSource('/process_progress');
-                eventSource.onmessage = function(event) {
-                    const data = JSON.parse(event.data);
-                    if (data.status === 'progress') {
-                        processProgress.style.width = data.progress + '%';
-                        processProgress.textContent = '处理中 ' + data.progress + '%';
-                    } else if (data.status === 'completed') {
-                        processProgress.style.width = '100%';
-                        processProgress.textContent = '处理完成';
-                        eventSource.close();
-                        alert('文件处理完成');
-                    } else if (data.status === 'error') {
-                        processProgress.style.width = '0%';
-                        processProgress.textContent = '处理失败';
-                        eventSource.close();
-                        alert('文件处理失败: ' + data.message);
-                    }
-                };
+                alert('文件上传并处理成功');
+                // 上传成功后刷新数据集列表
+                loadDatasets();
             } else {
-                alert('文件上传失败: ' + response.message);
+                alert('文件处理失败: ' + response.message);
             }
         } else {
-            alert('文件上传失败');
+            alert('文件处理失败');
         }
     });
 
     xhr.addEventListener('error', function() {
-        alert('文件上传失败');
+        alert('文件上传处理失败');
     });
 
     xhr.open('POST', '/historical_analysis');
@@ -328,10 +308,9 @@ document.getElementById('startAnalysisBtn').addEventListener('click', function()
         return;
     }
 
-    // 获取选中的数据集
-    const selectedDataset = document.querySelector('#datasetList a.active');
-    if (!selectedDataset) {
-        alert('请选择要分析的数据集');
+    const dataset = document.getElementById('datasetSelect').value;
+    if (!dataset) {
+        alert('请选择数据集');
         return;
     }
 
@@ -343,7 +322,7 @@ document.getElementById('startAnalysisBtn').addEventListener('click', function()
         },
         body: JSON.stringify({
             model: model,
-            dataset: selectedDataset.getAttribute('data-dataset')
+            dataset: dataset
         })
     })
     .then(response => response.json())
@@ -399,6 +378,24 @@ function updateResultTable(data) {
 // 页面加载时初始化
 loadModels();
 loadDatasets();
+
+// 点击"选择处理数据"标签时刷新数据集列表
+document.getElementById('selectDatasetTab').addEventListener('click', function() {
+    loadDatasets();
+});
+
+// 选择数据集或模型时启用分析按钮
+document.getElementById('datasetSelect').addEventListener('change', function() {
+    const modelSelected = document.getElementById('modelSelect').value;
+    const datasetSelected = this.value;
+    document.getElementById('startAnalysisBtn').disabled = !(modelSelected && datasetSelected);
+});
+
+document.getElementById('modelSelect').addEventListener('change', function() {
+    const modelSelected = this.value;
+    const datasetSelected = document.getElementById('datasetSelect').value;
+    document.getElementById('startAnalysisBtn').disabled = !(modelSelected && datasetSelected);
+});
 
 // 窗口大小改变时重绘图表
 window.addEventListener('resize', function() {
