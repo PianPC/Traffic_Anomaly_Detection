@@ -159,19 +159,24 @@ let trafficOption = {
     }]
 };
 
-// 异常检测图表配置
+// 异常检测图表配置（与实时监测一致）
 let anomalyOption = {
     title: {
-        text: '异常类型分布'
+        text: '流量类型分布'
     },
     tooltip: {
         trigger: 'item',
         formatter: '{b}: {c} ({d}%)'
     },
+    legend: {
+        orient: 'vertical',
+        left: 'right',
+        data: [] // 初始为空，数据会动态更新
+    },
     series: [{
         type: 'pie',
         radius: '70%',
-        data: [],
+        data: [], // 初始为空
         emphasis: {
             itemStyle: {
                 shadowBlur: 10,
@@ -303,47 +308,83 @@ document.getElementById('uploadForm').addEventListener('submit', function(e) {
 // 开始分析
 document.getElementById('startAnalysisBtn').addEventListener('click', function() {
     const model = document.getElementById('modelSelect').value;
+    const dataset = document.getElementById('datasetSelect').value;
+
     if (!model) {
         alert('请选择检测模型');
         return;
     }
-
-    const dataset = document.getElementById('datasetSelect').value;
     if (!dataset) {
         alert('请选择数据集');
         return;
     }
 
-    // 发送分析请求
+    // 显示加载状态
+    this.disabled = true;
+    this.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 分析中...';
+
     fetch('/analyze_data', {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json'  // 确保设置了这个header
         },
         body: JSON.stringify({
             model: model,
             dataset: dataset
         })
     })
-    .then(response => response.json())
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        return response.json();
+    })
     .then(data => {
+        console.log("收到响应数据:", data);  // 调试输出
         if (data.status === 'success') {
-            // 更新图表
-            updateCharts(data.data);
-            // 更新结果表格
+            // 处理成功情况
+            console.log("准备更新图表，数据:", data.data);  // 调试输出
+            updateCharts(data.data);  // 确保这行被执行
             updateResultTable(data.data);
         } else {
-            alert('分析失败: ' + data.message);
+            console.error('后端返回错误:', data.message);
         }
     })
-    .catch(error => console.error('分析失败:', error));
+    .catch(error => {
+        console.error('请求失败:', error);
+    })
+    .finally(() => {
+        // 恢复按钮状态
+        this.disabled = false;
+        this.textContent = '开始分析';
+    });
 });
+
+// 显示提示的函数
+function showAlert(message, type) {
+    const alertDiv = document.createElement('div');
+    alertDiv.className = `alert alert-${type} alert-dismissible fade show mt-3`;
+    alertDiv.setAttribute('role', 'alert');
+    alertDiv.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    `;
+
+    // 插入到卡片底部
+    const card = document.querySelector('.card.mt-4');
+    card.appendChild(alertDiv);
+
+    // 5秒后自动消失
+    setTimeout(() => {
+        alertDiv.remove();
+    }, 5000);
+}
 
 // 更新图表
 function updateCharts(data) {
     // 更新流量图表
     if (data.traffic) {
-        trafficOption.xAxis.data = data.traffic.map(item => item.time);
+        trafficOption.xAxis.data = data.traffic.map((item, index) => index);
         trafficOption.series[0].data = data.traffic.map(item => item.value);
         trafficChart.setOption(trafficOption);
     }
@@ -351,6 +392,8 @@ function updateCharts(data) {
     // 更新异常检测图表
     if (data.anomalies) {
         anomalyOption.series[0].data = data.anomalies;
+        // 更新图例数据
+        anomalyOption.legend.data = data.anomalies.map(item => item.name);
         anomalyChart.setOption(anomalyOption);
     }
 }
@@ -363,11 +406,27 @@ function updateResultTable(data) {
     if (data.details) {
         data.details.forEach(item => {
             const row = document.createElement('tr');
+
+            // 根据异常类型设置行样式
+            if (item.anomaly_type === 'BENIGN') {
+                row.className = 'table-success';
+            } else if (item.anomaly_type === 'UNKNOWN') {
+                row.className = 'table-primary';
+            } else {
+                // 异常流量根据类型设置不同颜色
+                const anomalyColors = {
+                    'Bot': 'table-warning',    // 黄色
+                    'DDoS': 'table-danger',    // 红色
+                    'PortScan': 'table-orange' // 橙色
+                };
+                row.className = anomalyColors[item.anomaly_type] || 'table-danger';
+            }
+
             row.innerHTML = `
                 <td>${item.time}</td>
-                <td>${item.size}</td>
+                <td>${(item.size / 1024).toFixed(2)} KB</td>
                 <td>${item.packet_count}</td>
-                <td>${item.anomaly_type || '正常'}</td>
+                <td>${item.anomaly_type}</td>
                 <td>${item.confidence}%</td>
             `;
             tbody.appendChild(row);
@@ -403,4 +462,24 @@ window.addEventListener('resize', function() {
     anomalyChart.resize();
 });
 </script>
+
+<style>
+    /* 添加橙色表格样式 */
+    .table-orange {
+        --bs-table-bg: #ff9966;
+        --bs-table-striped-bg: #ff8c5a;
+        --bs-table-striped-color: #000;
+        --bs-table-active-bg: #ff7f40;
+        --bs-table-active-color: #000;
+        --bs-table-hover-bg: #ff8c5a;
+        --bs-table-hover-color: #000;
+        color: #000;
+        border-color: #ff7f40;
+    }
+
+    /* 警报样式 */
+    .alert {
+        transition: opacity 0.5s ease;
+    }
+    </style>
 {% endblock %}
