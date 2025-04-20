@@ -8,24 +8,31 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 def extract_flows(pcap_file, min_packets=20):
     """提取流数据（增强元数据）"""
+    print("正在处理"+pcap_file)
     packets = rdpcap(pcap_file)
     flows = defaultdict(list)
 
     for packet in packets:
         if 'IP' in packet and ('TCP' in packet or 'UDP' in packet):
-            # 提取五元组
+            # 获取IP层信息
             src_ip = packet['IP'].src
             dst_ip = packet['IP'].dst
-            proto = packet['IP'].proto
-            src_port = packet['TCP'].sport if 'TCP' in packet else packet['UDP'].sport
-            dst_port = packet['TCP'].dport if 'TCP' in packet else packet['UDP'].dport
+            protocol = packet['IP'].proto
 
-            # 生成标准化flow_id
+            # 获取传输层信息
+            if 'TCP' in packet:
+                src_port = packet['TCP'].sport
+                dst_port = packet['TCP'].dport
+            else:  # UDP
+                src_port = packet['UDP'].sport
+                dst_port = packet['UDP'].dport
+
+            # 生成标准化flow_id（使用-作为分隔符）
             if src_ip < dst_ip:
-                flow_id = f"{src_ip}:{src_port}→{dst_ip}:{dst_port}({proto})"
+                flow_id = f"{src_ip}:{src_port}-{dst_ip}:{dst_port}({protocol})"
                 direction = 1
             else:
-                flow_id = f"{dst_ip}:{dst_port}→{src_ip}:{src_port}({proto})"
+                flow_id = f"{dst_ip}:{dst_port}-{src_ip}:{src_port}({protocol})"
                 direction = -1
 
             # 记录包数据
@@ -48,13 +55,18 @@ def extract_flows(pcap_file, min_packets=20):
             for i in range(1, len(packets))
         ]
 
+        # 统一使用-分割flow_id
+        parts = flow_id.split('-')
+        src_part = parts[0].split(':')
+        dst_part = parts[1].split(':')
+
         output_flows.append({
             'flow_id': flow_id,
-            'src_ip': flow_id.split('→')[0].split(':')[0],
-            'dst_ip': flow_id.split('→')[1].split(':')[0],
-            'src_port': int(flow_id.split('→')[0].split(':')[1]),
-            'dst_port': int(flow_id.split('→')[1].split(':')[0]),
-            'protocol': 'TCP' if 'TCP' in str(packets[0]) else 'UDP',
+            'src_ip': src_part[0],
+            'dst_ip': dst_part[0],
+            'src_port': int(src_part[1]),
+            'dst_port': int(dst_part[1].split('(')[0]),
+            'protocol': protocol,
             'start_time': packets[0]['timestamp'],
             'end_time': packets[-1]['timestamp'],
             'duration': packets[-1]['timestamp'] - packets[0]['timestamp'],

@@ -352,8 +352,67 @@ def check_processing_status():
 #             'status': 'error',
 #             'message': str(e)
 #         })
+
+#region 历史检测测试路由
+@app.route('/mock_analyze_data', methods=['POST'])
+def mock_analyze_data():
+    """模拟分析结果"""
+    # 原始数据
+    file_path = r'E:\workplace\Code\VSCodeProject\traffic_anomaly_detection\dataset\historical_test\historical_test.json'
+    # 读取JSON文件
+    with open(file_path, 'r', encoding='utf-8') as f:
+        flows = json.load(f)
+
+    # 构建响应数据
+    mock_data = {
+        "status": "success",
+        "data": {
+            "anomalies": [
+                {"value": len(flows)-10, "name": "BENIGN", "itemStyle": {"color": "#67C23A"}},
+                {"value": 2, "name": "DDoS", "itemStyle": {"color": "#F56C6C"}},
+                {"value": 3, "name": "PortScan", "itemStyle": {"color": "#409EFF"}},
+                {"value": 5, "name": "Bot", "itemStyle": {"color": "#E6A23C"}}
+            ],
+            "details": [
+                {
+                    "flow_id": flow["flow_id"],
+                    "time": i,
+                    "size": flow["total_bytes"],
+                    "packet_count": len(flow["packet_length"]),
+                    "anomaly_type": flow["prediction"]["label"],
+                    "confidence": round(flow["prediction"]["confidence"], 2),
+                    "src_ip": flow["src_ip"],
+                    "dst_ip": flow["dst_ip"],
+                    "src_port": flow["src_port"],
+                    "dst_port": flow["dst_port"],
+                    "protocol": "TCP" if flow["protocol"] == 6 else "UDP",
+                    "duration": flow["duration"]
+                }
+                for i, flow in enumerate(flows)
+            ],
+            "label_counts": {
+                "BENIGN": len(flows)-10,
+                "DDoS": 2,
+                "PortScan": 3,
+                "Bot": 5
+            },
+            "traffic": [
+                {
+                    "time": i,
+                    "value": len(flow["packet_length"]),
+                    "flow_id": flow["flow_id"],
+                    "bytes": flow["total_bytes"]
+                }
+                for i, flow in enumerate(flows)
+            ]
+        }
+    }
+    return jsonify(mock_data)
+#endregion
+
+
 #region 模型训练中处理pcap
-def process_pcap_file(file_path, output_dir):
+def process_pcap_file(file_path, output_dir, dataset):
     """多进程处理PCAP文件，按流分类保存为JSON格式"""
     try:
         # 初始化处理状态
@@ -1067,9 +1126,9 @@ def upload_training_dataset():
                 pcap_files.append(file_path)
 
         # 4. 处理所有PCAP文件
-        result = process_pcap_file(originaldata_dir, csv_dir, dataset_dir)
-        if result.get('status') == 'error':
-            return jsonify(result)
+        # result = process_pcap_file(originaldata_dir, csv_dir, dataset_dir)
+        # if result.get('status') == 'error':
+        #     return jsonify(result)
 
         return jsonify({
             'status': 'success',
