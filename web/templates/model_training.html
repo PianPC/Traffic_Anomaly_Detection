@@ -156,7 +156,7 @@ let metricsOption = {
     xAxis: {
         type: 'category',
         name: '训练步数',
-        data: [3000, 3500, 4000, 4500, 5000, 8000, 8500, 9000, 9500, 10000]
+        data: []
     },
     yAxis: [
         {
@@ -177,36 +177,31 @@ let metricsOption = {
         {
             name: '训练损失',
             type: 'line',
-            data: [0.0012, 0.0013, 0.0011, 0.0011, 0.0012, 0.0009, 0.0010, 0.0007, 0.0011, 0.0009]
+            data: []
         },
         {
             name: '验证损失',
             type: 'line',
-            data: [0.0013, 0.0011, 0.0008, 0.0012, 0.0012, 0.0013, 0.0011, 0.0009, 0.0011, 0.001]
+            data: []
         },
         {
             name: '训练准确率',
             type: 'line',
             yAxisIndex: 1,
-            data: [90, 92, 93, 95, 98, 99, 99, 98, 99, 99]
+            data: []
         },
         {
             name: '验证准确率',
             type: 'line',
             yAxisIndex: 1,
-            data: [90, 91, 92, 93, 95, 97, 99, 98, 99, 99]
+            data: []
         }
     ]
 };
 
 // 混淆矩阵数据示例 (4x4矩阵)
 // 实际数据需要根据您的分类结果填充
-let confusionMatrixData = [
-    [0.87, 0.05, 0.03, 0.05], // 实际类别0的预测分布
-    [0.02, 0.88, 0.08, 0.02], // 实际类别1的预测分布
-    [0.01, 0.10, 0.86, 0.03], // 实际类别2的预测分布
-    [0.12, 0.03, 0.02, 0.83]  // 实际类别3的预测分布
-];
+let confusionMatrixData = [];
 
 // 将二维数组转换为heatmap需要的格式
 let heatmapData = [];
@@ -292,7 +287,7 @@ let confusionMatrixOption = {
 // ROC曲线图表配置
 let rocOption = {
     title: {
-        text: 'ROC曲线 (AUC = 0.9906)'
+        text: 'ROC曲线 (AUC)'
     },
     tooltip: {
         trigger: 'axis',
@@ -314,8 +309,7 @@ let rocOption = {
         {
             name: 'FS-Net',
             type: 'line',
-            data: [[0, 0], [0.05, 0.96], [0.1, 0.98],
-            [0.2, 0.985], [0.5, 0.99], [1, 1]],
+            data: [],
             smooth: true,
             lineStyle: { width: 3 },
                 itemStyle: { color: '#d04f35' },
@@ -551,44 +545,205 @@ function loadModels() {
         });
 }
 
-// 开始训练
-document.getElementById('startTrainingBtn').addEventListener('click', function() {
-    const dataset = document.getElementById('datasetSelect').value;
-    const model = document.getElementById('modelSelect').value;
+// 开始训练演示版本-----------------------------------
 
-    if (!dataset) {
-        alert('请选择数据集');
-        return;
-    }
-    if (!model) {
-        alert('请选择模型');
-        return;
-    }
-    console.log("dataset:", dataset);
-    console.log("model:", model);
+// 开始训练按钮点击事件
+// 开始训练按钮点击事件
+document.getElementById('startTrainingBtn').addEventListener('click', function() {
+    // 显示加载状态
+    document.getElementById('trainingStatus').textContent = '正在准备训练...';
+    updateTrainingProgress(0);
 
     // 发送训练请求
-    fetch('/train_model', {
+    fetch('/mock_train_model', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            dataset: dataset,
-            model: model
-        })
+        }
     })
     .then(response => response.json())
     .then(data => {
         if (data.status === 'success') {
-            // 开始监听训练进度
-            startTrainingProgress(data.pid);
+            // 直接使用返回的数据绘制图表
+            drawCharts(data.metrics);
+            document.getElementById('trainingStatus').textContent = '训练完成';
+            updateTrainingProgress(100);
         } else {
             alert('开始训练失败: ' + data.message);
         }
     })
     .catch(error => console.error('开始训练失败:', error));
 });
+
+// 直接绘制图表的函数
+function drawCharts(metricsData) {
+    // 初始化图表实例
+    const metricsChart = echarts.init(document.getElementById('metricsChart'));
+    const confusionMatrix = echarts.init(document.getElementById('confusionMatrix'));
+    const rocCurve = echarts.init(document.getElementById('rocCurve'));
+
+    // 1. 绘制训练指标图表
+    metricsChart.setOption({
+        title: { text: '训练指标' },
+        tooltip: { trigger: 'axis' },
+        legend: { data: ['训练损失', '验证损失', '训练准确率', '验证准确率'] },
+        xAxis: {
+            type: 'category',
+            name: '训练步数',
+            data: metricsData.steps
+        },
+        yAxis: [
+            { type: 'value', name: '损失', position: 'left' },
+            {
+                type: 'value',
+                name: '准确率',
+                position: 'right',
+                axisLabel: { formatter: '{value}%' }
+            }
+        ],
+        series: [
+            { name: '训练损失', type: 'line', data: metricsData.train_losses },
+            { name: '验证损失', type: 'line', data: metricsData.dev_losses },
+            { name: '训练准确率', type: 'line', yAxisIndex: 1, data: metricsData.train_accuracies },
+            { name: '验证准确率', type: 'line', yAxisIndex: 1, data: metricsData.dev_accuracies }
+        ]
+    });
+
+    // 2. 绘制混淆矩阵
+    const heatmapData = [];
+    for (let i = 0; i < metricsData.confusion_matrix.length; i++) {
+        for (let j = 0; j < metricsData.confusion_matrix[i].length; j++) {
+            heatmapData.push([j, i, metricsData.confusion_matrix[i][j]]);
+        }
+    }
+
+    confusionMatrix.setOption({
+        title: { text: '四分类混淆矩阵', left: 'center' },
+        tooltip: {
+            position: 'top',
+            formatter: params => `实际: 类别${params.value[1]}<br>预测: 类别${params.value[0]}<br>比例: ${(params.value[2]*100).toFixed(1)}%`
+        },
+        grid: { height: '70%', top: '15%', containLabel: true },
+        xAxis: {
+            type: 'category',
+            data: ['预测类别0', '预测类别1', '预测类别2', '预测类别3'],
+            splitArea: { show: true },
+            axisLabel: { interval: 0, rotate: 45 }
+        },
+        yAxis: {
+            type: 'category',
+            data: ['实际类别0', '实际类别1', '实际类别2', '实际类别3'],
+            splitArea: { show: true }
+        },
+        visualMap: {
+            min: 0,
+            max: 1,
+            calculable: true,
+            orient: 'horizontal',
+            left: 'center',
+            bottom: '5%',
+            inRange: {
+                color: ['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#ffffbf', '#fee090', '#fdae61', '#f46d43', '#d73027', '#a50026']
+            }
+        },
+        series: [{
+            name: '分类准确率',
+            type: 'heatmap',
+            data: heatmapData,
+            label: {
+                show: true,
+                formatter: params => (params.value[2]*100).toFixed(1) + '%'
+            },
+            itemStyle: {
+                borderColor: '#fff',
+                borderWidth: 1
+            }
+        }]
+    });
+
+    // 3. 绘制ROC曲线
+    rocCurve.setOption({
+        title: { text: `ROC曲线 (AUC = ${metricsData.auc.toFixed(4)})` },
+        tooltip: {
+            trigger: 'axis',
+            formatter: 'FPR: {c0}<br>TPR: {c1}'
+        },
+        xAxis: {
+            type: 'value',
+            name: '假阳性率(FPR)',
+            min: 0,
+            max: 1
+        },
+        yAxis: {
+            type: 'value',
+            name: '真阳性率(TPR)',
+            min: 0,
+            max: 1
+        },
+        series: [{
+            name: 'FS-Net',
+            type: 'line',
+            data: metricsData.roc_curve,
+            smooth: true,
+            lineStyle: { width: 3 },
+            itemStyle: { color: '#d04f35' },
+            areaStyle: {
+                color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                    { offset: 0, color: 'rgba(208,79,53,0.7)' },
+                    { offset: 1, color: 'rgba(208,79,53,0.1)' }
+                ])
+            }
+        }]
+    });
+
+    // 窗口大小改变时重绘图表
+    window.addEventListener('resize', function() {
+        metricsChart.resize();
+        confusionMatrix.resize();
+        rocCurve.resize();
+    });
+}
+// ---------------------------------------------------------------------------------------------------------
+
+
+// // 开始训练
+// document.getElementById('startTrainingBtn').addEventListener('click', function() {
+//     const dataset = document.getElementById('datasetSelect').value;
+//     const model = document.getElementById('modelSelect').value;
+
+//     if (!dataset) {
+//         alert('请选择数据集');
+//         return;
+//     }
+//     if (!model) {
+//         alert('请选择模型');
+//         return;
+//     }
+//     console.log("dataset:", dataset);
+//     console.log("model:", model);
+
+//     // 发送训练请求
+//     fetch('/train_model', {
+//         method: 'POST',
+//         headers: {
+//             'Content-Type': 'application/json'
+//         },
+//         body: JSON.stringify({
+//             dataset: dataset,
+//             model: model
+//         })
+//     })
+//     .then(response => response.json())
+//     .then(data => {
+//         if (data.status === 'success') {
+//             // 开始监听训练进度
+//             startTrainingProgress(data.pid);
+//         } else {
+//             alert('开始训练失败: ' + data.message);
+//         }
+//     })
+//     .catch(error => console.error('开始训练失败:', error));
+// });
 
 // 监听训练进度
 function startTrainingProgress(pid) {
