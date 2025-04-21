@@ -23,6 +23,7 @@ from collections import defaultdict
 from models.dl.fsnet.fsnet_main_model import model as FSNetModel
 import tensorflow as tf
 from modules.pcap_to_json import process_dataset as process_single_dataset
+import modules.process_pcap
 
 
 app = Flask(
@@ -30,6 +31,7 @@ app = Flask(
     static_folder='static',     # 指定静态文件在文件系统中的存储目录
     static_url_path='/static')  # 定义静态文件在 URL 中的访问路径前缀。修改此处可以达到隐藏静态路径的效果
 
+# region 基础配置
 # 获取基础路径
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 
@@ -103,6 +105,9 @@ min_packets = 10  # 最小包数
 model_service = None  # 全局模型服务变量
 prediction_queue = queue.Queue()  # 预测结果队列
 
+#endregion
+
+#region 基础界面、获取各种状态
 def init_process_manager():
     global manager, process_progress
     if manager is None:
@@ -172,28 +177,28 @@ def get_interfaces():
             'message': str(e)
         })
 
-@app.route('/get_monitor_data')
-def get_monitor_data():
-    if not is_monitoring:
-        return jsonify({'status': 'error', 'message': '监控未启动'})
+# @app.route('/get_monitor_data')
+# def get_monitor_data():
+#     if not is_monitoring:
+#         return jsonify({'status': 'error', 'message': '监控未启动'})
 
-    try:
-        data = realtime_data_queue.get_nowait()
-        return jsonify({
-            'status': 'success',
-            'data': data
-        })
-    except queue.Empty:
-        return jsonify({
-            'status': 'success',
-            'data': {
-                'traffic': [],
-                'anomaly': [
-                    {'value': 0, 'name': '正常'},
-                    {'value': 0, 'name': '异常'}
-                ]
-            }
-        })
+#     try:
+#         data = realtime_data_queue.get_nowait()
+#         return jsonify({
+#             'status': 'success',
+#             'data': data
+#         })
+#     except queue.Empty:
+#         return jsonify({
+#             'status': 'success',
+#             'data': {
+#                 'traffic': [],
+#                 'anomaly': [
+#                     {'value': 0, 'name': '正常'},
+#                     {'value': 0, 'name': '异常'}
+#                 ]
+#             }
+#         })
 
 @app.route('/get_datasets')
 def get_datasets():
@@ -224,8 +229,11 @@ def get_datasets():
     except Exception as e:
         app.logger.error(f"获取数据集列表错误: {str(e)}")
         return jsonify({'status': 'error', 'message': str(e)})
+#endregion
 
-#region 历史检测模块文件上传与处理
+
+#region 历史检测模块
+# 文件上传与处理
 @app.route('/historical_analysis', methods=['GET', 'POST'])
 def historical_analysis():
     # 获取系统状态（保持不变）
@@ -320,290 +328,7 @@ def get_process_progress():
 
     return Response(generate(), mimetype='text/event-stream')
 
-@app.route('/check_processing_status')
-def check_processing_status():
-    """检查处理状态"""
-    if processing_status['is_processing']:
-        return jsonify({'status': 'processing'})
-    else:
-        return jsonify({'status': 'completed'})
-
-# @app.route('/process_dataset', methods=['POST'])
-# def process_dataset():
-#     try:
-#         data = request.json
-#         dataset_directory = data.get('dataset_directory')
-#         output_directory = data.get('output_directory')
-#         is_training = data.get('is_training', False)
-
-#         if is_training:
-#             # 调用预训练函数
-#             pre_train(dataset_directory)
-
-#         # 调用 tojson.py 处理数据集
-#         result = process_dataset(dataset_directory, output_directory)
-
-#         return jsonify({
-#             'status': 'success',
-#             'message': '预处理完成'
-#         })
-#     except Exception as e:
-#         return jsonify({
-#             'status': 'error',
-#             'message': str(e)
-#         })
-
-#region 历史检测测试路由
-@app.route('/mock_analyze_data', methods=['POST'])
-def mock_analyze_data():
-    """模拟分析结果"""
-    # 原始数据
-    file_path = r'E:\workplace\Code\VSCodeProject\traffic_anomaly_detection\dataset\historical_test\historical_test.json'
-    # 读取JSON文件
-    with open(file_path, 'r', encoding='utf-8') as f:
-        flows = json.load(f)
-
-    # 构建响应数据
-    mock_data = {
-        "status": "success",
-        "data": {
-            "anomalies": [
-                {"value": len(flows)-10, "name": "BENIGN", "itemStyle": {"color": "#67C23A"}},
-                {"value": 2, "name": "DDoS", "itemStyle": {"color": "#F56C6C"}},
-                {"value": 3, "name": "PortScan", "itemStyle": {"color": "#409EFF"}},
-                {"value": 5, "name": "Bot", "itemStyle": {"color": "#E6A23C"}}
-            ],
-            "details": [
-                {
-                    "flow_id": flow["flow_id"],
-                    "time": i,
-                    "size": flow["total_bytes"],
-                    "packet_count": len(flow["packet_length"]),
-                    "anomaly_type": flow["prediction"]["label"],
-                    "confidence": round(flow["prediction"]["confidence"], 2),
-                    "src_ip": flow["src_ip"],
-                    "dst_ip": flow["dst_ip"],
-                    "src_port": flow["src_port"],
-                    "dst_port": flow["dst_port"],
-                    "protocol": "TCP" if flow["protocol"] == 6 else "UDP",
-                    "duration": flow["duration"]
-                }
-                for i, flow in enumerate(flows)
-            ],
-            "label_counts": {
-                "BENIGN": len(flows)-10,
-                "DDoS": 2,
-                "PortScan": 3,
-                "Bot": 5
-            },
-            "traffic": [
-                {
-                    "time": i,
-                    "value": len(flow["packet_length"]),
-                    "flow_id": flow["flow_id"],
-                    "bytes": flow["total_bytes"]
-                }
-                for i, flow in enumerate(flows)
-            ]
-        }
-    }
-    return jsonify(mock_data)
-#endregion
-
-#region 模型训练预先准备数据
-@app.route('/mock_train_model', methods=['POST'])
-def mock_train_model():
-    # 直接返回预先准备好的数据
-    return jsonify({
-        'status': 'success',
-        'message': '训练完成',
-        'metrics': {
-            'steps': [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000],
-            'train_losses': [0.3054, 0.2939, 0.2842, 0.2866, 0.2902, 0.288, 0.2916, 0.2881, 0.296, 0.2867],
-            'dev_losses': [0.3066, 0.2933, 0.288, 0.2876, 0.2894, 0.2895, 0.2879, 0.2908, 0.2963, 0.2914],
-            'train_accuracies': [86.15, 86.51, 87.19, 87.26, 87.01, 87.25, 86.84, 87.05, 86.12, 86.97],
-            'dev_accuracies': [85.95, 86.59, 87.04, 87.21, 87.31, 87.30, 87.05, 87.09, 86.17, 86.91],
-            'confusion_matrix': [
-                [0.85, 0.05, 0.07, 0.03],
-                [0.10, 0.78, 0.10, 0.05],
-                [0.08, 0.12, 0.70, 0.10],
-                [0.15, 0.05, 0.05, 0.75]
-            ],
-            "roc_curve": [
-                [0.0, 0.0],      # 起点
-                [0.1, 0.5],      # 早期有较好的区分度
-                [0.2, 0.65],
-                [0.3, 0.72],
-                [0.4, 0.76],
-                [0.5, 0.78],     # 接近AUC值
-                [0.6, 0.79],
-                [0.7, 0.80],
-                [0.8, 0.82],
-                [0.9, 0.85],
-                [1.0, 0.93]       # 终点
-            ],
-            "auc": 0.7690573338765309  # 直接使用提供的FTF值作为AUC
-        }
-    })
-#endregion
-
-#region 模型训练中处理pcap
-def process_pcap_file(file_path, output_dir, dataset):
-    """多进程处理PCAP文件，按流分类保存为JSON格式"""
-    try:
-        # 初始化处理状态
-        processing_status['is_processing'] = True
-        processing_status['current_file'] = os.path.basename(file_path)
-        processing_status['total_files'] = 1
-        processing_status['processed_files'] = 0
-
-        # 1. 读取PCAP文件
-        packets = rdpcap(file_path)
-        if len(packets) == 0:
-            processing_status['is_processing'] = False
-            return {'status': 'error', 'message': 'PCAP文件为空'}
-
-        # 2. 准备多进程处理
-        num_processes = min(mp.cpu_count(), 4)  # 限制最大进程数
-        chunk_size = len(packets) // num_processes + 1
-        chunks = [packets[i:i+chunk_size] for i in range(0, len(packets), chunk_size)]
-
-        # 3. 创建进程池
-        with mp.Pool(processes=num_processes) as pool:
-            # 使用partial固定output_dir参数
-            process_func = partial(process_pcap_chunk, output_dir=output_dir)
-            # 并行处理数据块
-            results = pool.map(process_func, chunks)
-
-        # 4. 合并结果
-        merged_flows = {}
-        for result in results:
-            for flow_key, flow_data in result.items():
-                if flow_key not in merged_flows:
-                    merged_flows[flow_key] = []
-                merged_flows[flow_key].extend(flow_data)
-
-        # 5. 获取对应的CSV文件路径
-        csv_file = file_path.replace('.pcap', '.pcap_ISCX.csv')
-        if not os.path.exists(csv_file):
-            processing_status['is_processing'] = False
-            return {'status': 'error', 'message': '未找到对应的CSV文件'}
-
-        # 6. 读取CSV文件获取标签（这部分也可以并行化）
-        try:
-            df = pd.read_csv(csv_file)
-            if 'Flow ID' not in df.columns or 'Label' not in df.columns:
-                processing_status['is_processing'] = False
-                return {'status': 'error', 'message': 'CSV文件缺少Flow ID或Label列'}
-
-            # 7. 多进程处理标签映射
-            label_to_flows = mp.Manager().dict()
-            flow_items = list(merged_flows.items())
-            flow_chunks = [flow_items[i::num_processes] for i in range(num_processes)]
-
-            with mp.Pool(processes=num_processes) as pool:
-                pool.starmap(
-                    partial(map_flows_to_labels, df=df, output_dict=label_to_flows),
-                    [((chunk,)) for chunk in flow_chunks]
-                )
-
-            # 8. 保存结果
-            save_results(label_to_flows, output_dir)
-
-            # 更新处理状态
-            processing_status['is_processing'] = False
-            processing_status['processed_files'] = 1
-            return {'status': 'success', 'message': 'PCAP处理完成'}
-
-        except Exception as e:
-            processing_status['is_processing'] = False
-            app.logger.error(f"处理CSV文件时出错: {str(e)}")
-            return {'status': 'error', 'message': f'处理CSV文件时出错: {str(e)}'}
-
-    except Exception as e:
-        processing_status['is_processing'] = False
-        app.logger.error(f"处理PCAP文件时出错: {str(e)}")
-        return {'status': 'error', 'message': str(e)}
-
-def process_pcap_chunk(packets, output_dir):
-    """处理PCAP数据块（子进程函数）"""
-    flows = {}
-    for pkt in packets:
-        if not IP in pkt and (TCP in pkt or UDP in pkt):
-            continue
-
-        # 获取IP层信息
-        src_ip = pkt[IP].src
-        dst_ip = pkt[IP].dst
-        protocol = pkt[IP].proto
-
-        # 获取传输层信息
-        if TCP in pkt:
-            src_port = pkt[TCP].sport
-            dst_port = pkt[TCP].dport
-        else:  # UDP
-            src_port = pkt[UDP].sport
-            dst_port = pkt[UDP].dport
-
-        # 确保源IP小于目的IP，以统一双向流的键
-        if src_ip < dst_ip:
-            flow_key = (src_ip, dst_ip, src_port, dst_port, protocol)
-            length = len(pkt)
-        else:
-            flow_key = (dst_ip, src_ip, dst_port, src_port, protocol)
-            length = -len(pkt)  # 负值表示反向
-
-        # 生成Flow ID，格式与CSV文件一致：源IP-目的IP-源端口-目的端口-协议
-        flow_id = f"{src_ip}-{dst_ip}-{src_port}-{dst_port}-{protocol}"
-
-        if flow_key not in flows:
-            flows[flow_key] = []
-        flows[flow_key].append((length, float(pkt.time), flow_id))
-
-    return flows
-
-def map_flows_to_labels(flow_chunk, df, output_dict):
-    """将流映射到标签（子进程函数）"""
-    for flow_key, flow_data in flow_chunk:
-        src_ip, dst_ip, src_port, dst_port, protocol = flow_key
-        flow_id = f"{src_ip}-{dst_ip}-{src_port}-{dst_port}-{protocol}"
-
-        matching_rows = df[df['Flow ID'] == flow_id]
-        if not matching_rows.empty:
-            label = matching_rows.iloc[0]['Label']
-            safe_label = label.replace('/', '_').replace('\\', '_')
-
-            # 按时间戳排序
-            flow_data.sort(key=lambda x: x[1])
-
-            # 提取特征
-            packet_lengths = [float(pkt[0]) for pkt in flow_data]
-            time_deltas = [0] + [float(flow_data[i][1] - flow_data[i-1][1])
-                               for i in range(1, len(flow_data))]
-
-            flow_entry = {
-                "packet_length": packet_lengths,
-                "arrive_time_delta": time_deltas
-            }
-
-            # 使用线程安全的方式更新共享字典
-            if safe_label not in output_dict:
-                output_dict[safe_label] = []
-            output_dict[safe_label].append(flow_entry)
-
-def save_results(label_to_flows, output_dir):
-    """保存最终结果"""
-    for label, flows in label_to_flows.items():
-        label_dir = os.path.join(output_dir, label)
-        os.makedirs(label_dir, exist_ok=True)
-
-        output_file = os.path.join(label_dir, f"{label}.json")
-        with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(flows, f, ensure_ascii=False, indent=2)
-        app.logger.info(f"已保存{len(flows)}条流到{output_file}")
-        app.logger.error(f"处理PCAP数据块时出错: {str(e)}")
-        return {}
-
+# pcap文件处理
 @app.route('/process_pcap', methods=['POST'])
 def process_pcap():
     """专门处理PCAP文件并返回流量统计"""
@@ -646,9 +371,8 @@ def process_pcap():
 
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})
-#endregion
 
-#region 对处理好的json进行预测
+#对处理好的json进行预测
 @app.route('/analyze_json', methods=['POST'])
 def analyze_json():
     """专门处理JSON预测"""
@@ -843,7 +567,111 @@ def analyze_data():
         return jsonify(result)
     else:
         return jsonify({'status': 'error', 'message': result['message']})
-# endregion
+
+#endregion
+
+#region 历史检测测试路由
+@app.route('/mock_analyze_data', methods=['POST'])
+def mock_analyze_data():
+    """模拟分析结果"""
+    # 原始数据
+    file_path = r'E:\workplace\Code\VSCodeProject\traffic_anomaly_detection\dataset\historical_test\historical_test.json'
+    # 读取JSON文件
+    with open(file_path, 'r', encoding='utf-8') as f:
+        flows = json.load(f)
+
+    # 构建响应数据
+    mock_data = {
+        "status": "success",
+        "data": {
+            "anomalies": [
+                {"value": len(flows)-10, "name": "BENIGN", "itemStyle": {"color": "#67C23A"}},
+                {"value": 2, "name": "DDoS", "itemStyle": {"color": "#F56C6C"}},
+                {"value": 3, "name": "PortScan", "itemStyle": {"color": "#409EFF"}},
+                {"value": 5, "name": "Bot", "itemStyle": {"color": "#E6A23C"}}
+            ],
+            "details": [
+                {
+                    "flow_id": flow["flow_id"],
+                    "time": i,
+                    "size": flow["total_bytes"],
+                    "packet_count": len(flow["packet_length"]),
+                    "anomaly_type": flow["prediction"]["label"],
+                    "confidence": round(flow["prediction"]["confidence"], 2),
+                    "src_ip": flow["src_ip"],
+                    "dst_ip": flow["dst_ip"],
+                    "src_port": flow["src_port"],
+                    "dst_port": flow["dst_port"],
+                    "protocol": "TCP" if flow["protocol"] == 6 else "UDP",
+                    "duration": flow["duration"]
+                }
+                for i, flow in enumerate(flows)
+            ],
+            "label_counts": {
+                "BENIGN": len(flows)-10,
+                "DDoS": 2,
+                "PortScan": 3,
+                "Bot": 5
+            },
+            "traffic": [
+                {
+                    "time": i,
+                    "value": len(flow["packet_length"]),
+                    "flow_id": flow["flow_id"],
+                    "bytes": flow["total_bytes"]
+                }
+                for i, flow in enumerate(flows)
+            ]
+        }
+    }
+    return jsonify(mock_data)
+#endregion
+
+#region 模型训练测试路由
+@app.route('/mock_train_model', methods=['POST'])
+def mock_train_model():
+    # 直接返回预先准备好的数据
+    return jsonify({
+        'status': 'success',
+        'message': '训练完成',
+        'metrics': {
+            'steps': [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000],
+            'train_losses': [0.3054, 0.2939, 0.2842, 0.2866, 0.2902, 0.288, 0.2916, 0.2881, 0.296, 0.2867],
+            'dev_losses': [0.3066, 0.2933, 0.288, 0.2876, 0.2894, 0.2895, 0.2879, 0.2908, 0.2963, 0.2914],
+            'train_accuracies': [86.15, 86.51, 87.19, 87.26, 87.01, 87.25, 86.84, 87.05, 86.12, 86.97],
+            'dev_accuracies': [85.95, 86.59, 87.04, 87.21, 87.31, 87.30, 87.05, 87.09, 86.17, 86.91],
+            'confusion_matrix': [
+                [0.85, 0.05, 0.07, 0.03],
+                [0.10, 0.78, 0.10, 0.05],
+                [0.08, 0.12, 0.70, 0.10],
+                [0.15, 0.05, 0.05, 0.75]
+            ],
+            "roc_curve": [
+                [0.0, 0.0],      # 起点
+                [0.1, 0.5],      # 早期有较好的区分度
+                [0.2, 0.65],
+                [0.3, 0.72],
+                [0.4, 0.76],
+                [0.5, 0.78],     # 接近AUC值
+                [0.6, 0.79],
+                [0.7, 0.80],
+                [0.8, 0.82],
+                [0.9, 0.85],
+                [1.0, 0.93]       # 终点
+            ],
+            "auc": 0.7690573338765309  # 直接使用提供的FTF值作为AUC
+        }
+    })
+#endregion
+
+#region 模型训练模块
+@app.route('/check_processing_status')
+def check_processing_status():
+    """检查处理状态"""
+    if processing_status['is_processing']:
+        return jsonify({'status': 'processing'})
+    else:
+        return jsonify({'status': 'completed'})
 
 @app.route('/model_training', methods=['GET', 'POST'])
 def model_training():
@@ -902,6 +730,7 @@ def get_training_status():
         'status_message': '正在训练...' if training_status['is_training'] else '训练已完成'
     })
 
+# 根据是否有xx_main_model.py文件判断是否是可生成模型代码
 @app.route('/get_available_models')
 def get_available_models():
     """获取可用的模型列表"""
@@ -1162,6 +991,7 @@ def upload_training_dataset():
                 pcap_files.append(file_path)
 
         # 4. 处理所有PCAP文件
+
         # result = process_pcap_file(originaldata_dir, csv_dir, dataset_dir)
         # if result.get('status') == 'error':
         #     return jsonify(result)
@@ -1179,6 +1009,7 @@ def upload_training_dataset():
             'status': 'error',
             'message': f'上传失败: {str(e)}'
         })
+#endregion
 
 #region 实时监测模块
 def load_model(model_name):
@@ -1205,7 +1036,6 @@ def load_model(model_name):
     except Exception as e:
         app.logger.error(f"加载模型失败: {str(e)}")
         return False
-
 
 def process_packet(packet):
     """处理单个数据包"""
@@ -1377,8 +1207,6 @@ def realtime_monitor():
     }
 
     return render_template('realtime_monitor.html', system_status=system_status)
-
-
 
 # @app.route('/get_predictions')
 # def get_predictions():

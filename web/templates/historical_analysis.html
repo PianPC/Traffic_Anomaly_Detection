@@ -363,19 +363,26 @@ document.getElementById('uploadForm').addEventListener('submit', function(e) {
 //     });
 // });
 
+// 开始分析（演示版）
 document.getElementById('startAnalysisBtn').addEventListener('click', function() {
-    fetch('/mock_analyze_data', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ model: 'fsnet', dataset: 'mock_data' })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.status === 'success') {
-            updateCharts(data.data);
-            updateResultTable(data.data);
-        }
-    });
+    // 等待5秒
+    setTimeout(() => {
+        fetch('/mock_analyze_data', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ model: 'fsnet', dataset: 'mock_data' })
+        })
+        .then(response => response.json())
+        .then(data => {
+            console.log('Received mock data:', data);  // 先打印看看数据
+            if (data.status === 'success') {
+                updateCharts(data.data);
+                updateResultTable(data.data);
+                console.log('Data structure:', data.data);  // 查看数据结构
+            }
+        })
+        .catch(error => console.error('Error fetching mock data:', error));
+    }, 5000);
 });
 
 // 修改上传处理逻辑

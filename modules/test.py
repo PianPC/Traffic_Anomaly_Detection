@@ -60,6 +60,20 @@ def process_flow(file_path, model_service):
         if label is not None:
             print(f"预测标签: {label}, 置信度: {confidence}")
 
+# 可以创建一个测试函数，模拟攻击流量
+def test_attack_detection():
+    # 模拟DDoS攻击流量 (大量短包)
+    ddos_flow = [[60]*100]  # 100个60字节的包
+    # 模拟PortScan流量 (大量短连接)
+    portscan_flow = [[60, 60, 60, 60]]*20
+
+    # 使用模型预测
+    ddos_pred = model_service.logit_online(ddos_flow)
+    portscan_pred = model_service.logit_online(portscan_flow)
+
+    print(f"DDoS预测结果: {np.argmax(ddos_pred)}, 置信度: {np.max(ddos_pred)}")
+    print(f"PortScan预测结果: {np.argmax(portscan_pred)}, 置信度: {np.max(portscan_pred)}")
+
 model_service = FSNetModel('train_data_test4', randseed=128, splitrate=0.6, max_len=200)
 # 假设模型已加载并准备好
-process_flow("E:/workplace/Code/VSCodeProject/traffic_anomaly_detection/dataset/data_20250418_144742/test4.json", model_service)
+test_attack_detection()
