@@ -92,6 +92,29 @@ def train(config):
         writer.close()
 
 
+# def _predict_test(sess, model, num, class_num):
+#     pred = [[] for _ in range(class_num)]
+#     real = [[] for _ in range(class_num)]
+#     sample_set = set()
+#     feature_set = {}
+#     for _ in tqdm(range(num), ascii=True, desc='Predict'):
+#         ids, preds, features = sess.run([model.ids, model.pred, model.logit])
+#         for idx, predx, feature in zip(ids.tolist(), preds.tolist(), features.tolist()):
+#             idx = idx.decode('utf-8')
+#             if idx in sample_set:
+#                 continue
+#             sample_set.add(idx)
+#             real_app = int(idx.strip().split('-')[0])
+#             real[real_app].append(real_app)
+#             pred[real_app].append(predx)
+#             if real_app not in feature_set:
+#                feature_set[real_app] =[]
+#             feature_set[real_app].append(feature)
+#     import pickle
+#     with open('feature_set_FSNET.pkl','wb') as fp:
+#         pickle.dump(feature_set, fp)
+#     return real, pred
+
 def _predict_test(sess, model, num, class_num):
     pred = [[] for _ in range(class_num)]
     real = [[] for _ in range(class_num)]
@@ -108,10 +131,36 @@ def _predict_test(sess, model, num, class_num):
             real[real_app].append(real_app)
             pred[real_app].append(predx)
             if real_app not in feature_set:
-               feature_set[real_app] =[]
+                feature_set[real_app] = []
             feature_set[real_app].append(feature)
+
+    # 新增：计算混淆矩阵和ROC曲线
+    from sklearn.metrics import confusion_matrix, roc_curve, auc
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # 展平真实标签和预测结果
+    y_true = np.concatenate([np.array(r) for r in real])
+    y_pred = np.concatenate([np.array(p) for p in pred])
+
+    # 混淆矩阵
+    cm = confusion_matrix(y_true, y_pred)
+    print("Confusion Matrix:\n", cm)
+
+    # ROC曲线（二分类或多分类需调整）
+    if class_num == 2:
+        fpr, tpr, _ = roc_curve(y_true, y_pred)
+        roc_auc = auc(fpr, tpr)
+        plt.plot(fpr, tpr, label=f'AUC = {roc_auc:.2f}')
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.legend()
+        plt.savefig(os.path.join(config.pred_dir, 'roc_curve.png'))
+        plt.close()
+
+    # 保存特征和结果（原逻辑）
     import pickle
-    with open('feature_set_FSNET.pkl','wb') as fp:
+    with open('feature_set_FSNET.pkl', 'wb') as fp:
         pickle.dump(feature_set, fp)
     return real, pred
 

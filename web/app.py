@@ -100,7 +100,7 @@ processing_status = {
 
 # 添加全局变量
 flow_buffer = defaultdict(dict)  # 存储每个流的包
-flow_timeout = 5  # 流的超时时间（秒）
+flow_timeout = 10  # 流的超时时间（秒）
 min_packets = 10  # 最小包数
 model_service = None  # 全局模型服务变量
 prediction_queue = queue.Queue()  # 预测结果队列
@@ -450,8 +450,8 @@ def predict_from_json(json_path, model_name, dataset_name):
         # 定义标签映射（与实时监测模块一致）
         label_mapping = {
             0: 'BENIGN',
-            1: 'Bot',
-            2: 'DDoS',
+            1: 'DDoS',
+            2: 'DoS',
             3: 'PortScan',
             -1: 'UNKNOWN'
         }
@@ -516,8 +516,8 @@ def predict_from_json(json_path, model_name, dataset_name):
         # 生成饼图数据
         color_map = {
             'BENIGN': '#91cc75',
-            'Bot': '#fac858',
-            'DDoS': '#ee6666',
+            'DDoS': '#fac858',
+            'DoS': '#ee6666',
             'PortScan': '#ff9966',
             'UNKNOWN': '#5470c6'
         }
@@ -586,9 +586,9 @@ def mock_analyze_data():
         "data": {
             "anomalies": [
                 {"value": len(flows)-10, "name": "BENIGN", "itemStyle": {"color": "#67C23A"}},
-                {"value": 2, "name": "DDoS", "itemStyle": {"color": "#F56C6C"}},
+                {"value": 2, "name": "DoS", "itemStyle": {"color": "#F56C6C"}},
                 {"value": 3, "name": "PortScan", "itemStyle": {"color": "#409EFF"}},
-                {"value": 5, "name": "Bot", "itemStyle": {"color": "#E6A23C"}}
+                {"value": 5, "name": "DDoS", "itemStyle": {"color": "#E6A23C"}}
             ],
             "details": [
                 {
@@ -609,9 +609,9 @@ def mock_analyze_data():
             ],
             "label_counts": {
                 "BENIGN": len(flows)-10,
-                "DDoS": 2,
+                "DoS": 2,
                 "PortScan": 3,
-                "Bot": 5
+                "DDoS": 5
             },
             "traffic": [
                 {
@@ -635,31 +635,42 @@ def mock_train_model():
         'status': 'success',
         'message': '训练完成',
         'metrics': {
-            'steps': [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000],
-            'train_losses': [0.3054, 0.2939, 0.2842, 0.2866, 0.2902, 0.288, 0.2916, 0.2881, 0.296, 0.2867],
-            'dev_losses': [0.3066, 0.2933, 0.288, 0.2876, 0.2894, 0.2895, 0.2879, 0.2908, 0.2963, 0.2914],
-            'train_accuracies': [86.15, 86.51, 87.19, 87.26, 87.01, 87.25, 86.84, 87.05, 86.12, 86.97],
-            'dev_accuracies': [85.95, 86.59, 87.04, 87.21, 87.31, 87.30, 87.05, 87.09, 86.17, 86.91],
+            'steps': [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000,
+                     5500, 6000, 6500, 7000, 7500, 8000, 8500, 9000, 9500, 10000],
+            'train_losses': [0.2419, 0.2096, 0.2080, 0.2117, 0.2140, 0.2014, 0.2093,
+                            0.2196, 0.2020, 0.2098, 0.2116, 0.2138, 0.2081, 0.2048,
+                            0.2013, 0.2039, 0.2057, 0.2145, 0.2066, 0.1974],
+            'dev_losses': [0.2403, 0.2115, 0.2052, 0.2119, 0.2130, 0.2015, 0.2131,
+                          0.2104, 0.2078, 0.2039, 0.2066, 0.2100, 0.2059, 0.2064,
+                          0.2081, 0.1990, 0.2032, 0.2089, 0.2023, 0.2020],
+            'train_accuracies': [88.82, 89.81, 90.52, 90.31, 90.29, 90.72, 90.37,
+                                90.04, 91.15, 90.77, 90.41, 90.09, 90.80, 91.02,
+                                91.29, 91.03, 90.71, 90.48, 90.68, 90.99],
+            'dev_accuracies': [88.88, 89.76, 90.95, 90.31, 90.35, 90.88, 90.54,
+                             89.87, 90.95, 90.98, 90.69, 90.34, 91.05, 90.89,
+                             91.00, 91.50, 90.80, 90.84, 91.16, 91.16],
+
             'confusion_matrix': [
-                [0.85, 0.05, 0.07, 0.03],
-                [0.10, 0.78, 0.10, 0.05],
-                [0.08, 0.12, 0.70, 0.10],
-                [0.15, 0.05, 0.05, 0.75]
+                [0.90, 0.07, 0.02, 0.01],  # 真实类别0的预测分布
+                [0.08, 0.84, 0.06, 0.02],  # 真实类别1的预测分布
+                [0.01, 0.01, 0.98, 0.00],  # 真实类别2的预测分布
+                [0.40, 0.30, 0.20, 0.10]   # 真实类别3的预测分布
             ],
+
             "roc_curve": [
                 [0.0, 0.0],      # 起点
-                [0.1, 0.5],      # 早期有较好的区分度
-                [0.2, 0.65],
-                [0.3, 0.72],
-                [0.4, 0.76],
-                [0.5, 0.78],     # 接近AUC值
-                [0.6, 0.79],
-                [0.7, 0.80],
-                [0.8, 0.82],
-                [0.9, 0.85],
+                [0.1, 0.6],      # 早期有较好的区分度
+                [0.2, 0.75],
+                [0.3, 0.78],
+                [0.4, 0.80],
+                [0.5, 0.81],     # 接近AUC值
+                [0.6, 0.85],
+                [0.7, 0.86],
+                [0.8, 0.88],
+                [0.9, 0.90],
                 [1.0, 0.93]       # 终点
             ],
-            "auc": 0.7690573338765309  # 直接使用提供的FTF值作为AUC
+            "auc": 0.9109120383330838  # 直接使用提供的FTF值作为AUC
         }
     })
 #endregion
@@ -1012,15 +1023,32 @@ def upload_training_dataset():
 #endregion
 
 #region 实时监测模块
+# 在实时监测模块部分添加以下路由
+@app.route('/clear_predictions', methods=['POST'])
+def clear_predictions():
+    """清除预测队列"""
+    try:
+        # 清空预测队列
+        while not prediction_queue.empty():
+            prediction_queue.get_nowait()
+
+        # 清空流缓冲区
+        global flow_buffer
+        flow_buffer.clear()
+
+        return jsonify({'status': 'success', 'message': '预测记录已清除'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+
 def load_model(model_name):
     """加载指定的模型"""
     global model_service
     try:
         if model_name == 'fsnet':
             # 初始化FSNet模型
-            model_service = FSNetModel('train_data_test4', randseed=128, splitrate=0.6, max_len=200)
+            model_service = FSNetModel('train_data_test', randseed=128, splitrate=0.6, max_len=200)
             # 确保模型目录存在
-            model_dir = os.path.join('data', 'fsnet_train_data_test4_model', 'log')
+            model_dir = os.path.join('data', 'fsnet_train_data_test_model', 'log')
             if not os.path.exists(model_dir):
                 app.logger.error(f"模型目录不存在: {model_dir}")
                 return False
@@ -1232,8 +1260,8 @@ def get_predictions():
     # 从模型目录读取标签映射
     label_mapping = {
         0: 'BENIGN',
-        1: 'Bot',
-        2: 'DDoS',
+        1: 'DDoS',
+        2: 'DoS',
         3: 'PortScan',
         -1: 'UNKNOWN'
     }

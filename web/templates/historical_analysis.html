@@ -565,8 +565,8 @@ function updateResultTable(data) {
 function getRowClass(anomalyType) {
     const map = {
         'BENIGN': 'table-success',
-        'Bot': 'table-warning',
-        'DDoS': 'table-danger',
+        'DDoS': 'table-warning',
+        'DoS': 'table-danger',
         'PortScan': 'table-info'
     };
     return map[anomalyType] || '';
