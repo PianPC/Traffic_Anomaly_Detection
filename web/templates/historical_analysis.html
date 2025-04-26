@@ -117,7 +117,7 @@
                                     <th>持续时间</th>
                                     <th>总流量</th>
                                     <th>异常类型</th>
-                                    <th>置信度</th>
+                                    <!-- <th>置信度</th> -->
                                 </tr>
                             </thead>
                             <tbody id="resultTable">
@@ -554,12 +554,13 @@ function updateResultTable(data) {
                     <td>${item.duration ? item.duration.toFixed(2)+'s' : 'N/A'}</td>
                     <td>${(item.size / 1024).toFixed(2)} KB</td>
                     <td>${item.anomaly_type}</td>
-                    <td>${item.confidence}%</td>
+
                 </tr>
             `).join('')}
         </tbody>
     `;
 }
+// <td>${Math.round(item.confidence * 100)}%</td>
 
 // 根据异常类型设置行样式
 function getRowClass(anomalyType) {

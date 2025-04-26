@@ -100,7 +100,7 @@ processing_status = {
 
 # 添加全局变量
 flow_buffer = defaultdict(dict)  # 存储每个流的包
-flow_timeout = 10  # 流的超时时间（秒）
+flow_timeout = 15  # 流的超时时间（秒）
 min_packets = 10  # 最小包数
 model_service = None  # 全局模型服务变量
 prediction_queue = queue.Queue()  # 预测结果队列
@@ -411,8 +411,11 @@ def predict_flow(model_service, flow_data):
     """使用FS-Net模型进行流量预测"""
     try:
         prediction = model_service.logit_online(flow_data)
-        pred_label = int(np.argmax(prediction))
-        confidence = float(np.max(prediction[0]))
+        if prediction is not None:
+            # 添加softmax处理
+            softmax_pred = tf.nn.softmax(prediction[0]).numpy()
+            pred_label = int(np.argmax(softmax_pred))
+            confidence = float(np.max(softmax_pred))
         return pred_label, confidence
     except Exception as e:
         print(f"预测失败: {str(e)}")
@@ -474,7 +477,7 @@ def predict_from_json(json_path, model_name, dataset_name):
             # 进行预测
             prediction = model_service.logit_online([flow['packet_length']])
             pred_label = int(np.argmax(prediction))
-            confidence = float(np.max(prediction[0]))
+            confidence = float(tf.nn.softmax(prediction[0]).numpy().max())
 
             # 获取标签名称
             label_name = label_mapping.get(pred_label, 'UNKNOWN')
@@ -651,24 +654,26 @@ def mock_train_model():
                              91.00, 91.50, 90.80, 90.84, 91.16, 91.16],
 
             'confusion_matrix': [
-                [0.90, 0.07, 0.02, 0.01],  # 真实类别0的预测分布
-                [0.08, 0.84, 0.06, 0.02],  # 真实类别1的预测分布
-                [0.01, 0.01, 0.98, 0.00],  # 真实类别2的预测分布
-                [0.40, 0.30, 0.20, 0.10]   # 真实类别3的预测分布
+                [0.92, 0.05, 0.02, 0.01],  # 类别0：92%正确，主要误判为类别1（5%）
+                [0.04, 0.88, 0.06, 0.02],  # 类别1：88%正确，与类别2易混淆（6%）
+                [0.01, 0.03, 0.94, 0.02],  # 类别2：94%正确，小幅误判为类别1/3
+                [0.10, 0.15, 0.05, 0.70]   # 类别3：70%正确（较难分类，但不再完全失效）
             ],
 
             "roc_curve": [
-                [0.0, 0.0],      # 起点
-                [0.1, 0.6],      # 早期有较好的区分度
-                [0.2, 0.75],
-                [0.3, 0.78],
-                [0.4, 0.80],
-                [0.5, 0.81],     # 接近AUC值
-                [0.6, 0.85],
-                [0.7, 0.86],
-                [0.8, 0.88],
-                [0.9, 0.90],
-                [1.0, 0.93]       # 终点
+                [0.0, 0.0],      # 起点（FPR=0%, TPR=0%）
+                [0.05, 0.55],    # 低FPR时TPR快速上升
+                [0.1, 0.75],     # FPR=10%时TPR=75%
+                [0.15, 0.82],
+                [0.2, 0.86],     # 拐点：FPR=20%时TPR=86%
+                [0.3, 0.89],
+                [0.4, 0.91],
+                [0.5, 0.925],
+                [0.6, 0.935],
+                [0.7, 0.945],
+                [0.8, 0.955],
+                [0.9, 0.965],
+                [1.0, 1.0]       # 终点（FPR=100%, TPR=100%）
             ],
             "auc": 0.9109120383330838  # 直接使用提供的FTF值作为AUC
         }
@@ -1023,7 +1028,40 @@ def upload_training_dataset():
 #endregion
 
 #region 实时监测模块
-# 在实时监测模块部分添加以下路由
+@app.route('/save_predictions', methods=['POST'])
+def save_predictions():
+    """保存预测结果到JSON文件"""
+    try:
+        data = request.get_json()
+        predictions = data.get('predictions', [])
+
+        if not predictions:
+            return jsonify({'status': 'error', 'message': '没有可保存的预测结果'})
+
+        # 创建输出目录
+        output_dir = os.path.join('E:\\workplace\\Code\\VSCodeProject\\traffic_anomaly_detection\\output')
+        os.makedirs(output_dir, exist_ok=True)
+
+        # 以时间戳命名文件
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        file_path = os.path.join(output_dir, f'realtime_predictions_{timestamp}.json')
+
+        # 保存结果
+        with open(file_path, 'w') as f:
+            json.dump(predictions, f, indent=2)
+
+        return jsonify({
+            'status': 'success',
+            'message': '预测结果保存成功',
+            'file_path': file_path
+        })
+
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        })
+
 @app.route('/clear_predictions', methods=['POST'])
 def clear_predictions():
     """清除预测队列"""
@@ -1169,7 +1207,7 @@ def start_packet_capture(interface):
             return
         process_packet(packet)
 
-    sniff(iface=interface, prn=packet_handler, store=0)
+    sniff(iface=interface, prn=packet_handler, store=0, promisc=True)
 
 @app.route('/realtime_monitor', methods=['GET', 'POST'])
 def realtime_monitor():

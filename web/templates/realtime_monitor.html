@@ -37,6 +37,7 @@
             <div class="col-12">
                 <button class="btn btn-primary" id="startBtn">开始监测</button>
                 <button class="btn btn-danger" id="stopBtn" disabled>停止监测</button>
+                <button class="btn btn-success" id="saveBtn">保存结果</button>
                 <button class="btn btn-warning" id="clearBtn">清除记录</button>
             </div>
         </div>
@@ -96,7 +97,7 @@
                                     <th>目标IP</th>
                                     <th>协议</th>
                                     <th>异常类型</th>
-                                    <th>置信度</th>
+                                    <!-- <th>置信度</th> -->
                                 </tr>
                             </thead>
                             <tbody id="anomalyDetailTable">
@@ -128,7 +129,7 @@
                                         <th>流量</th>
                                         <th>响应时间</th>  <!-- 新增列 -->
                                         <th>预测结果</th>
-                                        <th>置信度</th>
+                                        <!-- <th>置信度</th> -->
                                     </tr>
                                 </thead>
                                 <tbody id="anomalyTableBody">
@@ -401,9 +402,8 @@ function updatePredictions() {
                         <td>${(prediction.bytes_per_second / 1024).toFixed(2)} KB/s</td>
                         <td>${(prediction.response_time * 1000).toFixed(2)} ms</td>
                         <td>${prediction.label_name}</td>
-                        <td>${(prediction.confidence * 100).toFixed(2)}%</td>
                     `;
-
+                    // <td>${formatConfidence(prediction.confidence)}</td>
                     tbody.insertBefore(row, tbody.firstChild);
 
                     // 更新流量图表
@@ -428,6 +428,19 @@ function updatePredictions() {
         .catch(error => console.error('获取预测结果失败:', error));
 }
 
+// 修改置信度显示逻辑，增加保护措施
+function formatConfidence(confidence) {
+    // 确保confidence是数字
+    const confValue = Number(confidence);
+
+    // 处理异常值
+    if (isNaN(confValue)) return '0%';
+    if (confValue > 100) return '100%'; // 上限100%
+    if (confValue < 0) return '0%';     // 下限0%
+
+    // 正常显示
+    return confValue.toFixed(2) + '%';
+}
 
 // 更新饼图函数
 // updatePieChart({ BENIGN: 10, Bot: 5, DDoS: 2 });         手动更新饼图代码
@@ -484,9 +497,10 @@ function showAnomalyAlert(prediction) {
             源IP: ${prediction.src_ip}:${prediction.src_port}<br>
             目标IP: ${prediction.dst_ip}:${prediction.dst_port}<br>
             协议: ${prediction.protocol}<br>
-            置信度: ${(prediction.confidence * 100).toFixed(2)}%
+
         </div>
     `;
+    // 置信度: ${(prediction.confidence * 100).toFixed(2)}%
 
     // 添加到容器
     toastContainer.appendChild(toast);
@@ -600,6 +614,56 @@ document.getElementById('stopBtn').addEventListener('click', function() {
         }
     })
     .catch(error => console.error('停止监测失败:', error));
+});
+
+// 保存结果按钮事件
+document.getElementById('saveBtn').addEventListener('click', function() {
+    // 获取当前所有预测结果
+    const predictions = [];
+    document.querySelectorAll('#anomalyTableBody tr').forEach(row => {
+        const srcIpPort = row.cells[1].textContent;
+        const dstIpPort = row.cells[2].textContent;
+        const protocol = row.cells[3].textContent;
+        let protocolNumber;
+        if (protocol === 'TCP') {
+            protocolNumber = 6;
+        } else if (protocol === 'UDP') {
+            protocolNumber = 17;
+        } else {
+            protocolNumber = 'N/A';
+        }
+        const flow_id = `${srcIpPort}-${dstIpPort}-${protocolNumber}`;
+        predictions.push({
+            flow_id: flow_id,
+            label: row.cells[7].textContent,
+            timestamp: row.cells[0].textContent
+        });
+    });
+
+    if (predictions.length === 0) {
+        alert('没有可保存的结果');
+        return;
+    }
+
+    fetch('/save_predictions', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ predictions: predictions })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            alert(`结果已保存到: ${data.file_path}`);
+        } else {
+            alert('保存失败: ' + data.message);
+        }
+    })
+    .catch(error => {
+        console.error('保存失败:', error);
+        alert('保存失败: ' + error.message);
+    });
 });
 
 // 添加清除记录按钮事件
