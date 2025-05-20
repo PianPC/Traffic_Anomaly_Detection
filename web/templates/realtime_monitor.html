@@ -621,22 +621,34 @@ document.getElementById('saveBtn').addEventListener('click', function() {
     // 获取当前所有预测结果
     const predictions = [];
     document.querySelectorAll('#anomalyTableBody tr').forEach(row => {
-        const srcIpPort = row.cells[1].textContent;
-        const dstIpPort = row.cells[2].textContent;
-        const protocol = row.cells[3].textContent;
+        const srcIpPort = row.cells[1].textContent;  // 格式: "IP:port" (如 "172.26.214.45:63813")
+        const dstIpPort = row.cells[2].textContent;  // 格式: "IP:port" (如 "104.18.18.125:443")
+        const protocol = row.cells[3].textContent;   // "TCP" 或 "UDP"
+
+        // 提取源IP、源端口、目标IP、目标端口
+        const [srcIp, srcPort] = srcIpPort.split(':');
+        const [dstIp, dstPort] = dstIpPort.split(':');
+
+        // 协议编号转换
         let protocolNumber;
         if (protocol === 'TCP') {
             protocolNumber = 6;
         } else if (protocol === 'UDP') {
             protocolNumber = 17;
         } else {
-            protocolNumber = 'N/A';
+            protocolNumber = 'N/A';  // 未知协议
         }
-        const flow_id = `${srcIpPort}-${dstIpPort}-${protocolNumber}`;
+
+        // 比较IP地址的字符串值，确保小在前
+        const isSrcFirst = srcIp.localeCompare(dstIp) <= 0;
+        const flow_id = isSrcFirst
+            ? `${srcIp}-${dstIp}-${srcPort}-${dstPort}-${protocolNumber}`
+            : `${dstIp}-${srcIp}-${dstPort}-${srcPort}-${protocolNumber}`;
+
         predictions.push({
             flow_id: flow_id,
-            label: row.cells[7].textContent,
-            timestamp: row.cells[0].textContent
+            label: row.cells[7].textContent,  // 预测标签
+            timestamp: row.cells[0].textContent  // 时间戳
         });
     });
 
@@ -645,6 +657,7 @@ document.getElementById('saveBtn').addEventListener('click', function() {
         return;
     }
 
+    // 发送保存请求
     fetch('/save_predictions', {
         method: 'POST',
         headers: {

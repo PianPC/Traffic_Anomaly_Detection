@@ -100,7 +100,7 @@ processing_status = {
 
 # 添加全局变量
 flow_buffer = defaultdict(dict)  # 存储每个流的包
-flow_timeout = 15  # 流的超时时间（秒）
+flow_timeout = 10  # 流的超时时间（秒）
 min_packets = 10  # 最小包数
 model_service = None  # 全局模型服务变量
 prediction_queue = queue.Queue()  # 预测结果队列
